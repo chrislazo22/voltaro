@@ -8,6 +8,7 @@ from loguru import logger
 import websockets
 from ocpp.v16 import ChargePoint as ChargePointV16
 from ocpp.v201 import ChargePoint as ChargePointV201
+from app.handlers.charge_point import ChargePoint
 
 # Configure logging
 logger.add(
@@ -17,18 +18,6 @@ logger.add(
     level="INFO",
     format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
 )
-
-class ChargePoint(ChargePointV16):
-    """ChargePoint implementation for OCPP 1.6."""
-    
-    async def on_boot_notification(self, charge_point_vendor: str, charge_point_model: str, **kwargs):
-        """Handle BootNotification requests."""
-        logger.info(f"Received boot notification from {charge_point_vendor} {charge_point_model}")
-        return {
-            "currentTime": datetime.utcnow().isoformat(),
-            "interval": 300,  # 5 minutes
-            "status": "Accepted"
-        }
 
 async def on_connect(websocket, path):
     """Handle new WebSocket connections."""
