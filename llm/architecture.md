@@ -1,4 +1,3 @@
-
 # ⚡ OCPP Backend Architecture (Python)
 
 This document outlines the architecture for a full-stack, scalable EV charging backend system using the Python `ocpp` package.
@@ -50,36 +49,45 @@ This document outlines the architecture for a full-stack, scalable EV charging b
 ## ⚙️ Component Breakdown
 
 ### 1. OCPP WebSocket Server
+
 - Built with `ocpp` + `websockets`
 - Handles OCPP 1.6/2.0.1 messages
 - Parses and dispatches message handlers
 
 ### 2. Message Handlers
+
 - Python methods decorated with `@on(...)`
 - Respond to messages like `BootNotification`, `Authorize`, `StartTransaction`, etc.
 
 ### 3. Session Manager
+
 - Tracks transaction state, energy use, session lifecycle
 
 ### 4. Database (PostgreSQL)
+
 - Stores charge point data, transactions, meter values, etc.
 - Use SQLAlchemy or Tortoise ORM
 
 ### 5. Authorization
+
 - Authorizes RFID tags using DB or API
 - Responds to `Authorize` requests
 
 ### 6. Heartbeat Tracker
+
 - Updates status based on incoming heartbeats
 
 ### 7. REST API (FastAPI or Django)
+
 - Exposes data to admin dashboard or external systems
 
 ### 8. Admin Dashboard
+
 - View charger status, sessions, history
 - Manage users and tags
 
 ### 9. Optional: Task Queue (Celery + Redis)
+
 - Background jobs for alerts, invoices, etc.
 
 ---
@@ -87,7 +95,7 @@ This document outlines the architecture for a full-stack, scalable EV charging b
 ## 🛠 Suggested File Structure
 
 ```
-ocpp_backend/
+voltaro/
 ├── app/
 │   ├── main.py                # Entry point for WebSocket server
 │   ├── config.py              # Config management
@@ -116,7 +124,7 @@ ocpp_backend/
 ## ✅ MVP Build Order
 
 | Phase | Feature                            |
-|-------|------------------------------------|
+| ----- | ---------------------------------- |
 | 1     | OCPP WebSocket server + handlers   |
 | 2     | Session persistence (Postgres)     |
 | 3     | Admin UI to view sessions/status   |
