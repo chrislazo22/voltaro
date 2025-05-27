@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from loguru import logger
 from ocpp.v16 import ChargePoint as ChargePointV16
 from ocpp.v16 import call_result
@@ -83,3 +83,32 @@ class ChargePoint(ChargePointV16):
             interval=300,  # Heartbeat interval in seconds
             status="Accepted",
         )
+
+    @on("Heartbeat")
+    async def on_heartbeat(self):
+        """Handle Heartbeat requests - update last_seen timestamp."""
+        logger.info(f"Heartbeat received from {self.id}")
+
+        # Update last_seen timestamp in database
+        async with AsyncSessionLocal() as session:
+            try:
+                charge_point = await session.get(ChargePointModel, self.id)
+
+                if charge_point:
+                    charge_point.last_seen = datetime.utcnow()
+                    charge_point.is_online = True
+                    charge_point.updated_at = datetime.utcnow()
+                    await session.commit()
+                    logger.debug(f"Updated last_seen for charge point {self.id}")
+                else:
+                    logger.warning(
+                        f"Received heartbeat from unknown charge point: {self.id}"
+                    )
+
+            except Exception as e:
+                logger.error(f"Failed to update heartbeat timestamp: {e}")
+                await session.rollback()
+                # Continue with response even if DB fails
+
+        # Return OCPP 1.6 compliant response with current time
+        return call_result.Heartbeat(current_time=datetime.utcnow().isoformat())

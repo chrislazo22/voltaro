@@ -16,15 +16,26 @@ async def main():
             cp = ChargePoint("CP001", ws)
 
             # Start the charge point (this handles incoming messages)
-            await asyncio.gather(cp.start(), send_boot_notification(cp))
+            await asyncio.gather(cp.start(), send_messages(cp))
     except Exception as e:
         print(f"Error: {e}")
 
 
-async def send_boot_notification(cp):
+async def send_messages(cp):
+    """Send BootNotification followed by periodic heartbeats."""
     # Wait a moment for the connection to be fully established
     await asyncio.sleep(1)
 
+    # Send BootNotification first
+    await send_boot_notification(cp)
+
+    # Send a few heartbeats with delays
+    for i in range(3):
+        await asyncio.sleep(2)  # Wait 2 seconds between heartbeats
+        await send_heartbeat(cp, i + 1)
+
+
+async def send_boot_notification(cp):
     print("Sending BootNotification...")
     request = call.BootNotification(
         charge_point_vendor="MockVendor",
@@ -44,6 +55,18 @@ async def send_boot_notification(cp):
         print(f"Heartbeat Interval: {response.interval} seconds")
     except Exception as e:
         print(f"Failed to send BootNotification: {e}")
+
+
+async def send_heartbeat(cp, sequence_number):
+    print(f"Sending Heartbeat #{sequence_number}...")
+    request = call.Heartbeat()
+
+    try:
+        response = await cp.call(request)
+        print(f"Heartbeat #{sequence_number} response: {response}")
+        print(f"Server Time: {response.current_time}")
+    except Exception as e:
+        print(f"Failed to send Heartbeat #{sequence_number}: {e}")
 
 
 if __name__ == "__main__":
