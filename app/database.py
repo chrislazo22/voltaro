@@ -51,9 +51,10 @@ async def get_db_session():
 
 async def init_db():
     """Initialize the database by creating all tables."""
+    # Import all models here to ensure they are registered
+    from app.models import ChargePoint, IdTag, Session, MeterValue
+    
     async with engine.begin() as conn:
-        # Import all models here to ensure they are registered
-        # from app.models import *  # We'll add this when we create models
         await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables created successfully")
 
