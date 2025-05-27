@@ -22,17 +22,32 @@ async def main():
 
 
 async def send_messages(cp):
-    """Send BootNotification followed by periodic heartbeats."""
+    """Send BootNotification, heartbeats, and test authorization."""
     # Wait a moment for the connection to be fully established
     await asyncio.sleep(1)
 
     # Send BootNotification first
     await send_boot_notification(cp)
 
-    # Send a few heartbeats with delays
-    for i in range(3):
+    # Send a couple of heartbeats
+    for i in range(2):
         await asyncio.sleep(2)  # Wait 2 seconds between heartbeats
         await send_heartbeat(cp, i + 1)
+
+    # Test authorization with different ID tags
+    test_tags = [
+        "VALID001",  # Should be accepted
+        "VALID002",  # Should be accepted
+        "BLOCKED001",  # Should be blocked
+        "EXPIRED001",  # Should be expired
+        "CHILD001",  # Should be accepted with parent
+        "UNKNOWN123",  # Should be invalid (not in database)
+    ]
+
+    print("\n🔐 Testing Authorization...")
+    for tag in test_tags:
+        await asyncio.sleep(1)  # Wait between authorization requests
+        await send_authorize(cp, tag)
 
 
 async def send_boot_notification(cp):
@@ -67,6 +82,25 @@ async def send_heartbeat(cp, sequence_number):
         print(f"Server Time: {response.current_time}")
     except Exception as e:
         print(f"Failed to send Heartbeat #{sequence_number}: {e}")
+
+
+async def send_authorize(cp, tag):
+    print(f"Sending Authorize request with tag: {tag}")
+    request = call.Authorize(id_tag=tag)
+
+    try:
+        response = await cp.call(request)
+        print(f"Authorize response for {tag}: {response}")
+        print(f"  Status: {response.id_tag_info['status']}")
+
+        # Show additional info if present
+        if "expiryDate" in response.id_tag_info:
+            print(f"  Expiry Date: {response.id_tag_info['expiryDate']}")
+        if "parentIdTag" in response.id_tag_info:
+            print(f"  Parent Tag: {response.id_tag_info['parentIdTag']}")
+
+    except Exception as e:
+        print(f"Failed to send Authorize request for {tag}: {e}")
 
 
 if __name__ == "__main__":

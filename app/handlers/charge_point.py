@@ -5,7 +5,8 @@ from ocpp.v16 import ChargePoint as ChargePointV16
 from ocpp.v16 import call_result
 from ocpp.routing import on
 from app.database import AsyncSessionLocal
-from app.models import ChargePoint as ChargePointModel
+from app.models import ChargePoint as ChargePointModel, IdTag
+from sqlalchemy import select
 
 
 class ChargePoint(ChargePointV16):
@@ -112,3 +113,55 @@ class ChargePoint(ChargePointV16):
 
         # Return OCPP 1.6 compliant response with current time
         return call_result.Heartbeat(current_time=datetime.utcnow().isoformat())
+
+    @on("Authorize")
+    async def on_authorize(self, id_tag):
+        """Handle Authorize requests - validate ID tag against database."""
+        logger.info(f"Authorize request received from {self.id} for idTag: {id_tag}")
+
+        # Default response for unknown/invalid tags
+        id_tag_info = {"status": "Invalid"}
+
+        # Look up ID tag in database
+        async with AsyncSessionLocal() as session:
+            try:
+                # Query for the ID tag
+                result = await session.execute(select(IdTag).where(IdTag.tag == id_tag))
+                tag_record = result.scalar_one_or_none()
+
+                if tag_record:
+                    # Check if tag is expired
+                    if (
+                        tag_record.expiry_date
+                        and tag_record.expiry_date < datetime.utcnow()
+                    ):
+                        id_tag_info = {
+                            "status": "Expired",
+                            "expiryDate": tag_record.expiry_date.isoformat(),
+                        }
+                        logger.info(f"ID tag {id_tag} is expired")
+                    else:
+                        # Use the tag's current status
+                        id_tag_info = {"status": tag_record.status}
+
+                        # Add optional fields if present
+                        if tag_record.expiry_date:
+                            id_tag_info["expiryDate"] = (
+                                tag_record.expiry_date.isoformat()
+                            )
+                        if tag_record.parent_id_tag:
+                            id_tag_info["parentIdTag"] = tag_record.parent_id_tag
+
+                        logger.info(
+                            f"ID tag {id_tag} authorized with status: {tag_record.status}"
+                        )
+                else:
+                    logger.info(f"ID tag {id_tag} not found in database")
+
+            except Exception as e:
+                logger.error(f"Failed to lookup ID tag {id_tag}: {e}")
+                # Return Invalid status on database error
+                id_tag_info = {"status": "Invalid"}
+
+        # Return OCPP 1.6 compliant response
+        return call_result.Authorize(id_tag_info=id_tag_info)
