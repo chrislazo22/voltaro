@@ -92,29 +92,58 @@ This document outlines the architecture for a full-stack, scalable EV charging b
 
 ---
 
-## 🛠 Suggested File Structure
+## ✅ Core Message Coverage
+
+This architecture implements the following Core Profile messages from OCPP 1.6:
+
+- `Authorize`
+- `BootNotification`
+- `StartTransaction`
+- `StopTransaction`
+- `Heartbeat`
+- `MeterValues`
+- `StatusNotification`
+- `ChangeAvailability`
+- `RemoteStartTransaction`
+- `RemoteStopTransaction`
+- `Reset`
+- `UnlockConnector`
+- `ChangeConfiguration`
+- `GetConfiguration`
+- `ClearCache`
+- `DataTransfer`
+
+---
+
+## 📁 Suggested File Structure
 
 ```
 voltaro/
 ├── app/
-│   ├── main.py                # Entry point for WebSocket server
-│   ├── config.py              # Config management
-│   ├── handlers/              # OCPP message handlers
-│   │   ├── boot_notification.py
+│   ├── main.py
+│   ├── config.py
+│   ├── charge_point.py
+│   ├── handlers/
 │   │   ├── authorize.py
-│   │   └── start_transaction.py
+│   │   ├── boot_notification.py
+│   │   ├── start_transaction.py
+│   │   ├── stop_transaction.py
+│   │   ├── heartbeat.py
+│   │   ├── metervalues.py
+│   │   ├── reset.py
+│   │   └── status_notification.py
 │   ├── services/
 │   │   ├── session_manager.py
-│   │   ├── heartbeat_tracker.py
-│   │   └── authorization.py
-│   ├── models/                # ORM models
-│   ├── api/                   # REST API endpoints (FastAPI)
-│   ├── schemas/               # Pydantic schemas
-│   ├── tasks/                 # Optional Celery tasks
-│   └── utils/                 # Utilities
-├── frontend/                  # React (or other) frontend app
+│   │   ├── authorization.py
+│   │   └── metering.py
+│   ├── models/
+│   │   └── schema.py
+│   ├── api/
+│   ├── schemas/
+│   ├── utils/
+├── tests/
+│   └── simulate_client.py
 ├── docker-compose.yml
-├── Dockerfile
 ├── requirements.txt
 └── README.md
 ```

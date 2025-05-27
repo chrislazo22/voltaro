@@ -70,3 +70,6 @@ logs/
 # dotenv
 .env
 .env.* 
+
+# misc
+.DS_Store
