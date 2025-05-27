@@ -2,6 +2,7 @@ import asyncio
 import websockets
 from ocpp.v16 import ChargePoint as ChargePointV16
 from ocpp.v16 import call
+from datetime import datetime
 
 
 class ChargePoint(ChargePointV16):
@@ -22,7 +23,7 @@ async def main():
 
 
 async def send_messages(cp):
-    """Send BootNotification, heartbeats, and test authorization."""
+    """Send BootNotification, heartbeats, authorization, and start transaction."""
     # Wait a moment for the connection to be fully established
     await asyncio.sleep(1)
 
@@ -48,6 +49,21 @@ async def send_messages(cp):
     for tag in test_tags:
         await asyncio.sleep(1)  # Wait between authorization requests
         await send_authorize(cp, tag)
+
+    # Test StartTransaction with valid and invalid tags
+    print("\n🔋 Testing StartTransaction...")
+
+    # Test with valid tag
+    await asyncio.sleep(2)
+    await send_start_transaction(cp, "VALID001", connector_id=1, meter_start=1000)
+
+    # Test with blocked tag
+    await asyncio.sleep(2)
+    await send_start_transaction(cp, "BLOCKED001", connector_id=2, meter_start=2000)
+
+    # Test with unknown tag
+    await asyncio.sleep(2)
+    await send_start_transaction(cp, "UNKNOWN123", connector_id=1, meter_start=3000)
 
 
 async def send_boot_notification(cp):
@@ -101,6 +117,33 @@ async def send_authorize(cp, tag):
 
     except Exception as e:
         print(f"Failed to send Authorize request for {tag}: {e}")
+
+
+async def send_start_transaction(cp, tag, connector_id, meter_start):
+    print(
+        f"Sending StartTransaction request with tag: {tag}, connector_id: {connector_id}, meter_start: {meter_start}"
+    )
+    request = call.StartTransaction(
+        id_tag=tag,
+        connector_id=connector_id,
+        meter_start=meter_start,
+        timestamp=datetime.utcnow().isoformat(),
+    )
+
+    try:
+        response = await cp.call(request)
+        print(f"StartTransaction response for {tag}: {response}")
+        print(f"  Status: {response.id_tag_info['status']}")
+        print(f"  Transaction ID: {response.transaction_id}")
+
+        # Show additional info if present
+        if "expiryDate" in response.id_tag_info:
+            print(f"  Expiry Date: {response.id_tag_info['expiryDate']}")
+        if "parentIdTag" in response.id_tag_info:
+            print(f"  Parent Tag: {response.id_tag_info['parentIdTag']}")
+
+    except Exception as e:
+        print(f"Failed to send StartTransaction request for {tag}: {e}")
 
 
 if __name__ == "__main__":

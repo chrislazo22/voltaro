@@ -5,8 +5,9 @@ from ocpp.v16 import ChargePoint as ChargePointV16
 from ocpp.v16 import call_result
 from ocpp.routing import on
 from app.database import AsyncSessionLocal
-from app.models import ChargePoint as ChargePointModel, IdTag
+from app.models import ChargePoint as ChargePointModel, IdTag, Session
 from sqlalchemy import select
+import random
 
 
 class ChargePoint(ChargePointV16):
@@ -119,6 +120,86 @@ class ChargePoint(ChargePointV16):
         """Handle Authorize requests - validate ID tag against database."""
         logger.info(f"Authorize request received from {self.id} for idTag: {id_tag}")
 
+        # Get ID tag info (reuse logic from authorize)
+        id_tag_info = await self._get_id_tag_info(id_tag)
+
+        # Return OCPP 1.6 compliant response
+        return call_result.Authorize(id_tag_info=id_tag_info)
+
+    @on("StartTransaction")
+    async def on_start_transaction(
+        self, connector_id, id_tag, meter_start, timestamp, **kwargs
+    ):
+        """Handle StartTransaction requests - create new charging session."""
+        logger.info(
+            f"StartTransaction received from {self.id}: connector={connector_id}, idTag={id_tag}, meterStart={meter_start}"
+        )
+
+        # Get ID tag info and validate authorization
+        id_tag_info = await self._get_id_tag_info(id_tag)
+
+        # Default transaction ID (will be updated if session is created)
+        transaction_id = 0
+
+        # Only create session if tag is accepted
+        if id_tag_info["status"] == "Accepted":
+            async with AsyncSessionLocal() as session:
+                try:
+                    # Get the ID tag record
+                    tag_result = await session.execute(
+                        select(IdTag).where(IdTag.tag == id_tag)
+                    )
+                    tag_record = tag_result.scalar_one_or_none()
+
+                    if tag_record:
+                        # Generate unique transaction ID
+                        transaction_id = await self._generate_transaction_id(session)
+
+                        # Parse timestamp
+                        if isinstance(timestamp, str):
+                            start_time = datetime.fromisoformat(
+                                timestamp.replace("Z", "+00:00")
+                            )
+                        else:
+                            start_time = timestamp
+
+                        # Create new session
+                        new_session = Session(
+                            transaction_id=transaction_id,
+                            charge_point_id=self.id,
+                            id_tag_id=tag_record.id,
+                            connector_id=connector_id,
+                            meter_start=meter_start,
+                            start_timestamp=start_time,
+                            status="Active",
+                            reservation_id=kwargs.get("reservation_id"),
+                        )
+                        session.add(new_session)
+                        await session.commit()
+
+                        logger.info(
+                            f"Created session {transaction_id} for {self.id} connector {connector_id}"
+                        )
+                    else:
+                        logger.error(f"ID tag {id_tag} not found when creating session")
+                        id_tag_info = {"status": "Invalid"}
+
+                except Exception as e:
+                    logger.error(f"Failed to create session: {e}")
+                    await session.rollback()
+                    id_tag_info = {"status": "Invalid"}
+        else:
+            logger.info(
+                f"StartTransaction rejected for {id_tag}: {id_tag_info['status']}"
+            )
+
+        # Return OCPP 1.6 compliant response
+        return call_result.StartTransaction(
+            id_tag_info=id_tag_info, transaction_id=transaction_id
+        )
+
+    async def _get_id_tag_info(self, id_tag):
+        """Helper method to get ID tag info (shared between Authorize and StartTransaction)."""
         # Default response for unknown/invalid tags
         id_tag_info = {"status": "Invalid"}
 
@@ -163,5 +244,20 @@ class ChargePoint(ChargePointV16):
                 # Return Invalid status on database error
                 id_tag_info = {"status": "Invalid"}
 
-        # Return OCPP 1.6 compliant response
-        return call_result.Authorize(id_tag_info=id_tag_info)
+        return id_tag_info
+
+    async def _generate_transaction_id(self, session):
+        """Generate a unique transaction ID."""
+        # Simple approach: use random number and check for uniqueness
+        # In production, you might use a sequence or UUID
+        while True:
+            transaction_id = random.randint(100000, 999999)
+
+            # Check if this ID already exists
+            result = await session.execute(
+                select(Session).where(Session.transaction_id == transaction_id)
+            )
+            existing = result.scalar_one_or_none()
+
+            if not existing:
+                return transaction_id
