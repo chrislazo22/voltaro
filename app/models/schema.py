@@ -19,10 +19,27 @@ class ChargePoint(Base):
     id: Mapped[str] = mapped_column(
         String(50), primary_key=True
     )  # Charge point identifier
-    vendor: Mapped[Optional[str]] = mapped_column(String(100))
-    model: Mapped[Optional[str]] = mapped_column(String(100))
-    serial_number: Mapped[Optional[str]] = mapped_column(String(100))
-    firmware_version: Mapped[Optional[str]] = mapped_column(String(50))
+
+    # Required BootNotification fields
+    vendor: Mapped[Optional[str]] = mapped_column(
+        String(20)
+    )  # chargePointVendor (max 20)
+    model: Mapped[Optional[str]] = mapped_column(
+        String(20)
+    )  # chargePointModel (max 20)
+
+    # Optional BootNotification fields
+    charge_point_serial_number: Mapped[Optional[str]] = mapped_column(
+        String(25)
+    )  # max 25
+    charge_box_serial_number: Mapped[Optional[str]] = mapped_column(
+        String(25)
+    )  # max 25
+    firmware_version: Mapped[Optional[str]] = mapped_column(String(50))  # max 50
+    iccid: Mapped[Optional[str]] = mapped_column(String(20))  # max 20
+    imsi: Mapped[Optional[str]] = mapped_column(String(20))  # max 20
+    meter_type: Mapped[Optional[str]] = mapped_column(String(25))  # max 25
+    meter_serial_number: Mapped[Optional[str]] = mapped_column(String(25))  # max 25
 
     # Status tracking
     status: Mapped[str] = mapped_column(
@@ -33,6 +50,9 @@ class ChargePoint(Base):
 
     # Boot notification data
     boot_reason: Mapped[Optional[str]] = mapped_column(String(50))
+    boot_status: Mapped[Optional[str]] = mapped_column(
+        String(10), default="Accepted"
+    )  # Accepted, Pending, Rejected
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -176,4 +196,3 @@ class MeterValue(Base):
 
     # Relationships
     session: Mapped["Session"] = relationship("Session", back_populates="meter_values")
-
