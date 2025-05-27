@@ -24,4 +24,17 @@ LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 SUPPORTED_PROTOCOLS = ['ocpp1.6']  # We'll add OCPP 2.0.1 later
 
 # Heartbeat settings
-DEFAULT_HEARTBEAT_INTERVAL = 300  # 5 minutes in seconds 
+DEFAULT_HEARTBEAT_INTERVAL = 300  # 5 minutes in seconds
+
+# Database settings
+DATABASE_URL = os.getenv(
+    'DATABASE_URL',
+    'postgresql+asyncpg://voltaro:voltaro@localhost:5432/voltaro'
+)
+print(f"Using DATABASE_URL: {DATABASE_URL}")
+
+# Database connection pool settings
+DB_POOL_SIZE = int(os.getenv('DB_POOL_SIZE', 10))
+DB_MAX_OVERFLOW = int(os.getenv('DB_MAX_OVERFLOW', 20))
+DB_POOL_TIMEOUT = int(os.getenv('DB_POOL_TIMEOUT', 30))
+DB_POOL_RECYCLE = int(os.getenv('DB_POOL_RECYCLE', 3600))  # 1 hour 

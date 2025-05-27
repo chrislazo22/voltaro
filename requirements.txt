@@ -5,3 +5,8 @@ python-dotenv==1.1.0
 loguru==0.7.3
 pytest==8.3.5
 pytest-asyncio==0.26.0
+
+# Database dependencies
+sqlalchemy==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
