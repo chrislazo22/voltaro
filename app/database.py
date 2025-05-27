@@ -1,6 +1,7 @@
 """
 Database configuration and session management.
 """
+
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from loguru import logger
@@ -9,12 +10,15 @@ from app.config import (
     DB_POOL_SIZE,
     DB_MAX_OVERFLOW,
     DB_POOL_TIMEOUT,
-    DB_POOL_RECYCLE
+    DB_POOL_RECYCLE,
 )
+
 
 class Base(DeclarativeBase):
     """Base class for all database models."""
+
     pass
+
 
 # Create async engine
 engine = create_async_engine(
@@ -28,10 +32,9 @@ engine = create_async_engine(
 
 # Create session factory
 AsyncSessionLocal = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False
+    engine, class_=AsyncSession, expire_on_commit=False
 )
+
 
 async def get_db_session():
     """Get a database session."""
@@ -45,6 +48,7 @@ async def get_db_session():
         finally:
             await session.close()
 
+
 async def init_db():
     """Initialize the database by creating all tables."""
     async with engine.begin() as conn:
@@ -53,7 +57,8 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables created successfully")
 
+
 async def close_db():
     """Close the database engine."""
     await engine.dispose()
-    logger.info("Database connection closed") 
+    logger.info("Database connection closed")
