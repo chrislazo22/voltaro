@@ -65,7 +65,7 @@ coverage.xml
 .pyre/
 
 # Logs
-logs/ocpp_server.log
+logs/
 
 # dotenv
 .env
