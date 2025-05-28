@@ -2,7 +2,7 @@ import asyncio
 import websockets
 from ocpp.v16 import ChargePoint as ChargePointV16
 from ocpp.v16 import call
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 class ChargePoint(ChargePointV16):
@@ -64,6 +64,20 @@ async def send_messages(cp):
     # Test with unknown tag
     await asyncio.sleep(2)
     await send_start_transaction(cp, "UNKNOWN123", connector_id=1, meter_start=3000)
+
+    # Test MeterValues during charging
+    print("\n⚡ Testing MeterValues...")
+
+    # Send some meter values for an active transaction
+    await asyncio.sleep(2)
+    await send_meter_values(
+        cp, connector_id=1, transaction_id=None
+    )  # Without transaction
+
+    await asyncio.sleep(2)
+    await send_meter_values(
+        cp, connector_id=1, transaction_id=123456
+    )  # With transaction (if exists)
 
 
 async def send_boot_notification(cp):
@@ -144,6 +158,79 @@ async def send_start_transaction(cp, tag, connector_id, meter_start):
 
     except Exception as e:
         print(f"Failed to send StartTransaction request for {tag}: {e}")
+
+
+async def send_meter_values(cp, connector_id, transaction_id=None):
+    print(
+        f"Sending MeterValues for connector {connector_id}, transaction_id: {transaction_id}"
+    )
+
+    # Create sample meter values with different measurands
+    meter_values = [
+        {
+            "timestamp": datetime.utcnow().isoformat(),
+            "sampledValue": [
+                {
+                    "value": "15420",
+                    "context": "Sample.Periodic",
+                    "measurand": "Energy.Active.Import.Register",
+                    "unit": "Wh",
+                    "location": "Outlet",
+                },
+                {
+                    "value": "7.2",
+                    "context": "Sample.Periodic",
+                    "measurand": "Power.Active.Import",
+                    "unit": "kW",
+                    "location": "Outlet",
+                },
+                {
+                    "value": "32.1",
+                    "context": "Sample.Periodic",
+                    "measurand": "Current.Import",
+                    "unit": "A",
+                    "phase": "L1",
+                    "location": "Outlet",
+                },
+            ],
+        },
+        {
+            "timestamp": (datetime.utcnow() + timedelta(seconds=30)).isoformat(),
+            "sampledValue": [
+                {
+                    "value": "15450",
+                    "context": "Sample.Periodic",
+                    "measurand": "Energy.Active.Import.Register",
+                    "unit": "Wh",
+                    "location": "Outlet",
+                },
+                {
+                    "value": "230.5",
+                    "context": "Sample.Periodic",
+                    "measurand": "Voltage",
+                    "unit": "V",
+                    "phase": "L1",
+                    "location": "Outlet",
+                },
+            ],
+        },
+    ]
+
+    # Build request
+    request_params = {"connector_id": connector_id, "meter_value": meter_values}
+
+    if transaction_id:
+        request_params["transaction_id"] = transaction_id
+
+    request = call.MeterValues(**request_params)
+
+    try:
+        response = await cp.call(request)
+        print(f"MeterValues response: {response}")
+        print(f"  Successfully sent {len(meter_values)} meter value sets")
+
+    except Exception as e:
+        print(f"Failed to send MeterValues: {e}")
 
 
 if __name__ == "__main__":

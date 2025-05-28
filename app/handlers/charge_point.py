@@ -5,7 +5,7 @@ from ocpp.v16 import ChargePoint as ChargePointV16
 from ocpp.v16 import call_result
 from ocpp.routing import on
 from app.database import AsyncSessionLocal
-from app.models import ChargePoint as ChargePointModel, IdTag, Session
+from app.models import ChargePoint as ChargePointModel, IdTag, Session, MeterValue
 from sqlalchemy import select
 import random
 
@@ -197,6 +197,99 @@ class ChargePoint(ChargePointV16):
         return call_result.StartTransaction(
             id_tag_info=id_tag_info, transaction_id=transaction_id
         )
+
+    @on("MeterValues")
+    async def on_meter_values(self, connector_id, meter_value, **kwargs):
+        """Handle MeterValues requests - store meter readings during charging sessions."""
+        transaction_id = kwargs.get("transaction_id")
+
+        logger.info(
+            f"MeterValues received from {self.id}: connector={connector_id}, "
+            f"transaction_id={transaction_id}, values_count={len(meter_value)}"
+        )
+
+        # Store meter values in database
+        async with AsyncSessionLocal() as session:
+            try:
+                # If transaction_id is provided, verify it exists and get the session
+                session_record = None
+                if transaction_id:
+                    session_result = await session.execute(
+                        select(Session).where(Session.transaction_id == transaction_id)
+                    )
+                    session_record = session_result.scalar_one_or_none()
+
+                    if not session_record:
+                        logger.warning(
+                            f"Transaction {transaction_id} not found for MeterValues from {self.id}"
+                        )
+
+                # Process each meter value
+                for meter_val in meter_value:
+                    # Parse timestamp
+                    timestamp = meter_val.get("timestamp")
+                    if isinstance(timestamp, str):
+                        meter_timestamp = datetime.fromisoformat(
+                            timestamp.replace("Z", "+00:00")
+                        )
+                    else:
+                        meter_timestamp = timestamp or datetime.utcnow()
+
+                    # Process each sampled value within this meter value
+                    sampled_values = meter_val.get("sampledValue", [])
+
+                    for sampled_val in sampled_values:
+                        # Extract sampled value fields
+                        value = sampled_val.get("value")
+                        context = sampled_val.get("context", "Sample.Periodic")
+                        format_type = sampled_val.get("format", "Raw")
+                        measurand = sampled_val.get(
+                            "measurand", "Energy.Active.Import.Register"
+                        )
+                        phase = sampled_val.get("phase")
+                        location = sampled_val.get("location", "Outlet")
+                        unit = sampled_val.get("unit", "Wh")
+
+                        # Convert value to float for storage
+                        try:
+                            numeric_value = float(value)
+                        except (ValueError, TypeError):
+                            logger.error(f"Invalid meter value: {value}")
+                            continue
+
+                        # Create MeterValue record
+                        meter_value_record = MeterValue(
+                            session_id=session_record.id if session_record else None,
+                            timestamp=meter_timestamp,
+                            value=numeric_value,
+                            unit=unit,
+                            measurand=measurand,
+                            phase=phase,
+                            location=location,
+                            context=context,
+                            format=format_type,
+                        )
+
+                        session.add(meter_value_record)
+
+                        logger.debug(
+                            f"Stored meter value: {numeric_value} {unit} "
+                            f"({measurand}) at {meter_timestamp}"
+                        )
+
+                await session.commit()
+                logger.info(
+                    f"Successfully stored {len(meter_value)} meter value sets "
+                    f"from {self.id} connector {connector_id}"
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to store meter values: {e}")
+                await session.rollback()
+                # Continue with response even if DB fails
+
+        # Return OCPP 1.6 compliant response (empty response)
+        return call_result.MeterValues()
 
     async def _get_id_tag_info(self, id_tag):
         """Helper method to get ID tag info (shared between Authorize and StartTransaction)."""
