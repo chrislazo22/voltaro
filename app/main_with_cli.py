@@ -1,5 +1,6 @@
 """
-Main entry point for the OCPP WebSocket server.
+Enhanced OCPP WebSocket server with integrated Central System CLI.
+This version includes a command-line interface for Central System operations.
 """
 
 import asyncio
@@ -11,6 +12,7 @@ from ocpp.v16 import ChargePoint as ChargePointV16
 from ocpp.v201 import ChargePoint as ChargePointV201
 from app.handlers.charge_point import ChargePoint
 from app.connection_manager import register_charge_point, unregister_charge_point
+from app.central_system_cli import start_cli
 
 # Configure logging
 logger.add(
@@ -52,15 +54,49 @@ async def on_connect(websocket, path):
             await unregister_charge_point(charge_point_id)
 
 
-async def main():
+async def start_server():
     """Start the WebSocket server."""
     server = await websockets.serve(
         on_connect, "0.0.0.0", 9000, subprotocols=["ocpp1.6"]
     )
 
     logger.info("OCPP WebSocket server started on ws://0.0.0.0:9000")
-    await server.wait_closed()
+    logger.info("Central System CLI will start in 3 seconds...")
+
+    # Wait a moment for server to fully start
+    await asyncio.sleep(3)
+
+    return server
+
+
+async def main():
+    """Start the WebSocket server with Central System CLI."""
+    print("🚀 Starting OCPP Server with Central System CLI")
+    print("=" * 60)
+
+    # Start the WebSocket server
+    server = await start_server()
+
+    # Start the Central System CLI
+    print("\n🎯 Starting Central System Command Interface...")
+    print("You can now send RemoteStartTransaction commands!")
+    print("Type 'help' for available commands.")
+
+    # Run both server and CLI concurrently
+    try:
+        await asyncio.gather(server.wait_closed(), start_cli())
+    except KeyboardInterrupt:
+        print("\n👋 Shutting down server...")
+        server.close()
+        await server.wait_closed()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n👋 Server stopped.")
+    except Exception as e:
+        print(f"❌ Server error: {e}")
+        logger.error(f"Server error: {e}")
+

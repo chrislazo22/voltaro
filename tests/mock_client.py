@@ -1,12 +1,98 @@
 import asyncio
 import websockets
 from ocpp.v16 import ChargePoint as ChargePointV16
-from ocpp.v16 import call
-from datetime import datetime, timedelta
+from ocpp.v16 import call, call_result
+from ocpp.routing import on
+from datetime import datetime, timedelta, timezone
+import sys
+import os
+
+# Add the parent directory to the path so we can import from app
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from app.utils import utc_now_iso
 
 
 class ChargePoint(ChargePointV16):
-    pass  # No custom handlers needed for the client
+    """Mock charge point that can handle Central System requests."""
+
+    @on("RemoteStartTransaction")
+    async def on_remote_start_transaction(self, id_tag, **kwargs):
+        """Handle RemoteStartTransaction requests from Central System."""
+        connector_id = kwargs.get("connector_id")
+        charging_profile = kwargs.get("charging_profile")
+
+        print(f"\n🔋 Received RemoteStartTransaction request:")
+        print(f"  ID Tag: {id_tag}")
+        print(f"  Connector ID: {connector_id}")
+        if charging_profile:
+            print(f"  Charging Profile ID: {charging_profile.get('chargingProfileId')}")
+
+        # Simulate charge point logic
+        # For demo purposes, accept most requests except for specific cases
+        if id_tag in ["BLOCKED001", "INVALID999", "EXPIRED001"]:
+            print(f"  ❌ Rejecting request for {id_tag}")
+            return call_result.RemoteStartTransaction(status="Rejected")
+
+        print(f"  ✅ Accepting request for {id_tag}")
+
+        # Schedule StatusNotification to be sent after response
+        # This avoids the timeout issue
+        asyncio.create_task(self._send_status_preparing_delayed(connector_id or 1))
+
+        return call_result.RemoteStartTransaction(status="Accepted")
+
+    @on("RemoteStopTransaction")
+    async def on_remote_stop_transaction(self, transaction_id):
+        """Handle RemoteStopTransaction requests from Central System."""
+        print(f"\n🛑 Received RemoteStopTransaction request:")
+        print(f"  Transaction ID: {transaction_id}")
+
+        # For demo purposes, accept most requests
+        print(f"  ✅ Accepting stop request for transaction {transaction_id}")
+
+        # In a real charge point, this would trigger:
+        # 1. Stop the charging process
+        # 2. Send StopTransaction request
+        # 3. StatusNotification (Available)
+
+        return call_result.RemoteStopTransaction(status="Accepted")
+
+    async def _send_status_preparing_delayed(self, connector_id):
+        """Send StatusNotification for Preparing state after a short delay."""
+        try:
+            # Wait a moment to ensure the RemoteStartTransaction response is sent first
+            await asyncio.sleep(0.5)
+
+            request = call.StatusNotification(
+                connector_id=connector_id,
+                error_code="NoError",
+                status="Preparing",
+                info="Remote start initiated",
+                timestamp=utc_now_iso(),
+            )
+            response = await self.call(request)
+            print(
+                f"  📊 Sent StatusNotification: Preparing for connector {connector_id}"
+            )
+        except Exception as e:
+            print(f"  ❌ Failed to send StatusNotification: {e}")
+
+    async def _send_status_preparing(self, connector_id):
+        """Send StatusNotification for Preparing state."""
+        try:
+            request = call.StatusNotification(
+                connector_id=connector_id,
+                error_code="NoError",
+                status="Preparing",
+                info="Remote start initiated",
+                timestamp=utc_now_iso(),
+            )
+            response = await self.call(request)
+            print(
+                f"  📊 Sent StatusNotification: Preparing for connector {connector_id}"
+            )
+        except Exception as e:
+            print(f"  ❌ Failed to send StatusNotification: {e}")
 
 
 async def main():
@@ -109,7 +195,7 @@ async def send_messages(cp):
         meter_stop=18000,
         reason="EVDisconnected",
         id_tag="VALID002",
-        include_transaction_data=True
+        include_transaction_data=True,
     )
 
     # Test StatusNotification
@@ -122,16 +208,13 @@ async def send_messages(cp):
         connector_id=0,
         status="Available",
         error_code="NoError",
-        info="Charge point online"
+        info="Charge point online",
     )
 
     # Test connector status transitions
     await asyncio.sleep(1)
     await send_status_notification(
-        cp,
-        connector_id=1,
-        status="Available",
-        error_code="NoError"
+        cp, connector_id=1, status="Available", error_code="NoError"
     )
 
     await asyncio.sleep(1)
@@ -140,7 +223,7 @@ async def send_messages(cp):
         connector_id=1,
         status="Preparing",
         error_code="NoError",
-        info="User initiated charging"
+        info="User initiated charging",
     )
 
     await asyncio.sleep(1)
@@ -149,7 +232,7 @@ async def send_messages(cp):
         connector_id=1,
         status="Charging",
         error_code="NoError",
-        info="Energy transfer started"
+        info="Energy transfer started",
     )
 
     await asyncio.sleep(1)
@@ -158,7 +241,7 @@ async def send_messages(cp):
         connector_id=1,
         status="SuspendedEV",
         error_code="NoError",
-        info="EV requested pause"
+        info="EV requested pause",
     )
 
     await asyncio.sleep(1)
@@ -167,15 +250,12 @@ async def send_messages(cp):
         connector_id=1,
         status="Finishing",
         error_code="NoError",
-        info="Transaction completed"
+        info="Transaction completed",
     )
 
     await asyncio.sleep(1)
     await send_status_notification(
-        cp,
-        connector_id=1,
-        status="Available",
-        error_code="NoError"
+        cp, connector_id=1, status="Available", error_code="NoError"
     )
 
     # Test error conditions
@@ -187,7 +267,7 @@ async def send_messages(cp):
         error_code="OverCurrentFailure",
         info="Overcurrent detected on connector 2",
         vendor_id="MockVendor",
-        vendor_error_code="ERR_001"
+        vendor_error_code="ERR_001",
     )
 
     await asyncio.sleep(1)
@@ -196,7 +276,7 @@ async def send_messages(cp):
         connector_id=2,
         status="Unavailable",
         error_code="InternalError",
-        info="Connector disabled for maintenance"
+        info="Connector disabled for maintenance",
     )
 
 
@@ -254,171 +334,152 @@ async def send_authorize(cp, tag):
 
 
 async def send_start_transaction(cp, tag, connector_id, meter_start):
-    print(
-        f"Sending StartTransaction request with tag: {tag}, connector_id: {connector_id}, meter_start: {meter_start}"
-    )
-    request = call.StartTransaction(
-        id_tag=tag,
-        connector_id=connector_id,
-        meter_start=meter_start,
-        timestamp=datetime.utcnow().isoformat(),
-    )
+    """Send StartTransaction request."""
+    print(f"\n🔋 Sending StartTransaction...")
+    print(f"  ID Tag: {tag}")
+    print(f"  Connector: {connector_id}")
+    print(f"  Meter Start: {meter_start} Wh")
 
     try:
+        request = call.StartTransaction(
+            connector_id=connector_id,
+            id_tag=tag,
+            meter_start=meter_start,
+            timestamp=utc_now_iso(),
+        )
         response = await cp.call(request)
-        print(f"StartTransaction response for {tag}: {response}")
-        print(f"  Status: {response.id_tag_info['status']}")
-        print(f"  Transaction ID: {response.transaction_id}")
 
-        # Show additional info if present
-        if "expiryDate" in response.id_tag_info:
-            print(f"  Expiry Date: {response.id_tag_info['expiryDate']}")
-        if "parentIdTag" in response.id_tag_info:
-            print(f"  Parent Tag: {response.id_tag_info['parentIdTag']}")
+        print(f"  Response: {response.id_tag_info['status']}")
+        if hasattr(response, "transaction_id"):
+            print(f"  Transaction ID: {response.transaction_id}")
+            return response.transaction_id
+        else:
+            print("  No transaction ID returned")
+            return None
 
     except Exception as e:
-        print(f"Failed to send StartTransaction request for {tag}: {e}")
+        print(f"  ❌ Error: {e}")
+        return None
 
 
 async def send_meter_values(cp, connector_id, transaction_id=None):
-    print(
-        f"Sending MeterValues for connector {connector_id}, transaction_id: {transaction_id}"
-    )
-
-    # Create sample meter values with different measurands
-    meter_values = [
-        {
-            "timestamp": datetime.utcnow().isoformat(),
-            "sampledValue": [
-                {
-                    "value": "15420",
-                    "context": "Sample.Periodic",
-                    "measurand": "Energy.Active.Import.Register",
-                    "unit": "Wh",
-                    "location": "Outlet",
-                },
-                {
-                    "value": "7.2",
-                    "context": "Sample.Periodic",
-                    "measurand": "Power.Active.Import",
-                    "unit": "kW",
-                    "location": "Outlet",
-                },
-                {
-                    "value": "32.1",
-                    "context": "Sample.Periodic",
-                    "measurand": "Current.Import",
-                    "unit": "A",
-                    "phase": "L1",
-                    "location": "Outlet",
-                },
-            ],
-        },
-        {
-            "timestamp": (datetime.utcnow() + timedelta(seconds=30)).isoformat(),
-            "sampledValue": [
-                {
-                    "value": "15450",
-                    "context": "Sample.Periodic",
-                    "measurand": "Energy.Active.Import.Register",
-                    "unit": "Wh",
-                    "location": "Outlet",
-                },
-                {
-                    "value": "230.5",
-                    "context": "Sample.Periodic",
-                    "measurand": "Voltage",
-                    "unit": "V",
-                    "phase": "L1",
-                    "location": "Outlet",
-                },
-            ],
-        },
-    ]
-
-    # Build request
-    request_params = {"connector_id": connector_id, "meter_value": meter_values}
-
-    if transaction_id:
-        request_params["transaction_id"] = transaction_id
-
-    request = call.MeterValues(**request_params)
+    """Send MeterValues request with sample energy readings."""
+    print(f"\n⚡ Sending MeterValues...")
+    print(f"  Connector: {connector_id}")
+    print(f"  Transaction: {transaction_id if transaction_id else 'None'}")
 
     try:
+        # Create sample meter values
+        meter_values = [
+            {
+                "timestamp": utc_now_iso(),
+                "sampledValue": [
+                    {
+                        "value": "15420",  # 15.42 kWh
+                        "context": "Sample.Periodic",
+                        "format": "Raw",
+                        "measurand": "Energy.Active.Import.Register",
+                        "location": "Outlet",
+                        "unit": "Wh",
+                    },
+                    {
+                        "value": "16.5",  # 16.5 Amps
+                        "context": "Sample.Periodic",
+                        "format": "Raw",
+                        "measurand": "Current.Import",
+                        "location": "Outlet",
+                        "unit": "A",
+                        "phase": "L1",
+                    },
+                ],
+            },
+            {
+                "timestamp": (
+                    datetime.now(timezone.utc) + timedelta(seconds=30)
+                ).isoformat(),
+                "sampledValue": [
+                    {
+                        "value": "15890",  # 15.89 kWh (470 Wh increase)
+                        "context": "Sample.Periodic",
+                        "format": "Raw",
+                        "measurand": "Energy.Active.Import.Register",
+                        "location": "Outlet",
+                        "unit": "Wh",
+                    }
+                ],
+            },
+        ]
+
+        request_params = {
+            "connector_id": connector_id,
+            "meter_value": meter_values,
+        }
+
+        # Add transaction_id if provided
+        if transaction_id:
+            request_params["transaction_id"] = transaction_id
+
+        request = call.MeterValues(**request_params)
         response = await cp.call(request)
-        print(f"MeterValues response: {response}")
-        print(f"  Successfully sent {len(meter_values)} meter value sets")
+
+        print(f"  ✅ MeterValues sent successfully")
+        print(f"  Energy reading: 15.42 kWh → 15.89 kWh")
+        print(f"  Current: 16.5A")
 
     except Exception as e:
-        print(f"Failed to send MeterValues: {e}")
+        print(f"  ❌ Error: {e}")
 
 
 async def send_stop_transaction(
     cp, transaction_id, meter_stop, reason, id_tag=None, include_transaction_data=False
 ):
-    print(
-        f"Sending StopTransaction request with transaction_id: {transaction_id}, meter_stop: {meter_stop}, reason: {reason}"
-    )
-
-    # Build request parameters
-    request_params = {
-        "transaction_id": transaction_id,
-        "meter_stop": meter_stop,
-        "timestamp": datetime.utcnow().isoformat(),
-        "reason": reason,
-    }
-
-    # Add optional id_tag if provided
+    """Send StopTransaction request."""
+    print(f"\n🛑 Sending StopTransaction...")
+    print(f"  Transaction ID: {transaction_id}")
+    print(f"  Meter Stop: {meter_stop} Wh")
+    print(f"  Reason: {reason}")
     if id_tag:
-        request_params["id_tag"] = id_tag
-        print(f"  Including id_tag: {id_tag}")
-
-    # Add optional transaction_data if requested
-    if include_transaction_data:
-        print("  Including transaction data (meter values)")
-        transaction_data = [
-            {
-                "timestamp": datetime.utcnow().isoformat(),
-                "sampledValue": [
-                    {
-                        "value": str(meter_stop),
-                        "context": "Transaction.End",
-                        "measurand": "Energy.Active.Import.Register",
-                        "unit": "Wh",
-                        "location": "Outlet",
-                    },
-                    {
-                        "value": "0.0",
-                        "context": "Transaction.End",
-                        "measurand": "Power.Active.Import",
-                        "unit": "kW",
-                        "location": "Outlet",
-                    },
-                ],
-            }
-        ]
-        request_params["transaction_data"] = transaction_data
-
-    request = call.StopTransaction(**request_params)
+        print(f"  ID Tag: {id_tag}")
 
     try:
+        request_params = {
+            "transaction_id": transaction_id,
+            "meter_stop": meter_stop,
+            "timestamp": utc_now_iso(),
+            "reason": reason,
+        }
+
+        # Add optional ID tag
+        if id_tag:
+            request_params["id_tag"] = id_tag
+
+        # Add transaction data if requested
+        if include_transaction_data:
+            request_params["transaction_data"] = [
+                {
+                    "timestamp": utc_now_iso(),
+                    "sampledValue": [
+                        {
+                            "value": str(meter_stop),
+                            "context": "Transaction.End",
+                            "format": "Raw",
+                            "measurand": "Energy.Active.Import.Register",
+                            "location": "Outlet",
+                            "unit": "Wh",
+                        }
+                    ],
+                }
+            ]
+
+        request = call.StopTransaction(**request_params)
         response = await cp.call(request)
-        print(f"StopTransaction response: {response}")
 
-        # Check if response contains id_tag_info
+        print(f"  ✅ StopTransaction sent successfully")
         if hasattr(response, "id_tag_info") and response.id_tag_info:
-            print(f"  ID Tag Info Status: {response.id_tag_info['status']}")
-            if "expiryDate" in response.id_tag_info:
-                print(f"  Expiry Date: {response.id_tag_info['expiryDate']}")
-            if "parentIdTag" in response.id_tag_info:
-                print(f"  Parent Tag: {response.id_tag_info['parentIdTag']}")
-        else:
-            print("  No ID tag info in response")
-
-        print("  ✅ Transaction stopped successfully")
+            print(f"  ID Tag Status: {response.id_tag_info['status']}")
 
     except Exception as e:
-        print(f"Failed to send StopTransaction request: {e}")
+        print(f"  ❌ Error: {e}")
 
 
 async def send_status_notification(
@@ -428,39 +489,39 @@ async def send_status_notification(
     error_code,
     info=None,
     vendor_id=None,
-    vendor_error_code=None
+    vendor_error_code=None,
 ):
-    print(
-        f"Sending StatusNotification request with connector_id: {connector_id}, status: {status}, error_code: {error_code}"
-    )
+    """Send StatusNotification request."""
+    print(f"\n📊 Sending StatusNotification...")
+    print(f"  Connector: {connector_id}")
+    print(f"  Status: {status}")
+    print(f"  Error Code: {error_code}")
     if info:
         print(f"  Info: {info}")
-    
-    # Build request parameters
-    request_params = {
-        "connector_id": connector_id,
-        "status": status,
-        "error_code": error_code,
-        "timestamp": datetime.utcnow().isoformat(),
-    }
-    
-    # Add optional fields if provided
-    if info:
-        request_params["info"] = info
-    if vendor_id:
-        request_params["vendor_id"] = vendor_id
-    if vendor_error_code:
-        request_params["vendor_error_code"] = vendor_error_code
-
-    request = call.StatusNotification(**request_params)
 
     try:
+        request_params = {
+            "connector_id": connector_id,
+            "error_code": error_code,
+            "status": status,
+            "timestamp": utc_now_iso(),
+        }
+
+        # Add optional fields
+        if info:
+            request_params["info"] = info
+        if vendor_id:
+            request_params["vendor_id"] = vendor_id
+        if vendor_error_code:
+            request_params["vendor_error_code"] = vendor_error_code
+
+        request = call.StatusNotification(**request_params)
         response = await cp.call(request)
-        print(f"StatusNotification response: {response}")
-        print("  ✅ Status notification sent successfully")
+
+        print(f"  ✅ StatusNotification sent successfully")
 
     except Exception as e:
-        print(f"Failed to send StatusNotification: {e}")
+        print(f"  ❌ Error: {e}")
 
 
 if __name__ == "__main__":

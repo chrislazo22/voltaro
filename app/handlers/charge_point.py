@@ -2,10 +2,17 @@ import asyncio
 from datetime import datetime, timezone
 from loguru import logger
 from ocpp.v16 import ChargePoint as ChargePointV16
-from ocpp.v16 import call_result
+from ocpp.v16 import call_result, call
 from ocpp.routing import on
 from app.database import AsyncSessionLocal
-from app.models import ChargePoint as ChargePointModel, IdTag, Session, MeterValue, ConnectorStatus
+from app.models import (
+    ChargePoint as ChargePointModel,
+    IdTag,
+    Session,
+    MeterValue,
+    ConnectorStatus,
+)
+from app.utils import utc_now_iso, utc_now_naive, parse_ocpp_timestamp
 from sqlalchemy import select
 import random
 
@@ -45,7 +52,7 @@ class ChargePoint(ChargePointV16):
                         meter_type=kwargs.get("meter_type"),
                         meter_serial_number=kwargs.get("meter_serial_number"),
                         is_online=True,
-                        last_seen=datetime.utcnow(),
+                        last_seen=utc_now_naive(),
                         boot_status="Accepted",
                     )
                     session.add(charge_point)
@@ -66,9 +73,9 @@ class ChargePoint(ChargePointV16):
                     charge_point.meter_type = kwargs.get("meter_type")
                     charge_point.meter_serial_number = kwargs.get("meter_serial_number")
                     charge_point.is_online = True
-                    charge_point.last_seen = datetime.utcnow()
+                    charge_point.last_seen = utc_now_naive()
                     charge_point.boot_status = "Accepted"
-                    charge_point.updated_at = datetime.utcnow()
+                    charge_point.updated_at = utc_now_naive()
                     logger.info(f"Updated existing charge point: {self.id}")
 
                 await session.commit()
@@ -81,7 +88,7 @@ class ChargePoint(ChargePointV16):
 
         # Return OCPP 1.6 compliant response
         return call_result.BootNotification(
-            current_time=datetime.utcnow().isoformat(),
+            current_time=utc_now_iso(),
             interval=300,  # Heartbeat interval in seconds
             status="Accepted",
         )
@@ -97,9 +104,9 @@ class ChargePoint(ChargePointV16):
                 charge_point = await session.get(ChargePointModel, self.id)
 
                 if charge_point:
-                    charge_point.last_seen = datetime.utcnow()
+                    charge_point.last_seen = utc_now_naive()
                     charge_point.is_online = True
-                    charge_point.updated_at = datetime.utcnow()
+                    charge_point.updated_at = utc_now_naive()
                     await session.commit()
                     logger.debug(f"Updated last_seen for charge point {self.id}")
                 else:
@@ -113,7 +120,7 @@ class ChargePoint(ChargePointV16):
                 # Continue with response even if DB fails
 
         # Return OCPP 1.6 compliant response with current time
-        return call_result.Heartbeat(current_time=datetime.utcnow().isoformat())
+        return call_result.Heartbeat(current_time=utc_now_iso())
 
     @on("Authorize")
     async def on_authorize(self, id_tag):
@@ -157,9 +164,7 @@ class ChargePoint(ChargePointV16):
 
                         # Parse timestamp
                         if isinstance(timestamp, str):
-                            start_time = datetime.fromisoformat(
-                                timestamp.replace("Z", "+00:00")
-                            )
+                            start_time = parse_ocpp_timestamp(timestamp)
                         else:
                             start_time = timestamp
 
@@ -229,11 +234,9 @@ class ChargePoint(ChargePointV16):
                     # Parse timestamp
                     timestamp = meter_val.get("timestamp")
                     if isinstance(timestamp, str):
-                        meter_timestamp = datetime.fromisoformat(
-                            timestamp.replace("Z", "+00:00")
-                        )
+                        meter_timestamp = parse_ocpp_timestamp(timestamp)
                     else:
-                        meter_timestamp = timestamp or datetime.utcnow()
+                        meter_timestamp = timestamp or utc_now_naive()
 
                     # Process each sampled value within this meter value
                     sampled_values = meter_val.get("sampledValue", [])
@@ -292,7 +295,9 @@ class ChargePoint(ChargePointV16):
         return call_result.MeterValues()
 
     @on("StopTransaction")
-    async def on_stop_transaction(self, transaction_id, timestamp, meter_stop, **kwargs):
+    async def on_stop_transaction(
+        self, transaction_id, timestamp, meter_stop, **kwargs
+    ):
         """Handle StopTransaction requests - end charging session and store final data."""
         id_tag = kwargs.get("id_tag")
         reason = kwargs.get("reason", "Local")
@@ -308,7 +313,7 @@ class ChargePoint(ChargePointV16):
 
         # Parse timestamp
         if isinstance(timestamp, str):
-            stop_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            stop_time = parse_ocpp_timestamp(timestamp)
         else:
             stop_time = timestamp
 
@@ -332,7 +337,7 @@ class ChargePoint(ChargePointV16):
                     session_record.stop_timestamp = stop_time
                     session_record.status = "Completed"
                     session_record.stop_reason = reason
-                    session_record.updated_at = datetime.utcnow()
+                    session_record.updated_at = utc_now_naive()
 
                     # Calculate energy consumed if we have both start and stop values
                     if session_record.meter_start is not None:
@@ -355,11 +360,9 @@ class ChargePoint(ChargePointV16):
                         # Parse timestamp
                         data_timestamp = meter_val.get("timestamp")
                         if isinstance(data_timestamp, str):
-                            meter_timestamp = datetime.fromisoformat(
-                                data_timestamp.replace("Z", "+00:00")
-                            )
+                            meter_timestamp = parse_ocpp_timestamp(data_timestamp)
                         else:
-                            meter_timestamp = data_timestamp or datetime.utcnow()
+                            meter_timestamp = data_timestamp or utc_now_naive()
 
                         # Process each sampled value
                         sampled_values = meter_val.get("sampledValue", [])
@@ -385,7 +388,9 @@ class ChargePoint(ChargePointV16):
 
                             # Create MeterValue record
                             meter_value_record = MeterValue(
-                                session_id=session_record.id if session_record else None,
+                                session_id=(
+                                    session_record.id if session_record else None
+                                ),
                                 timestamp=meter_timestamp,
                                 value=numeric_value,
                                 unit=unit,
@@ -441,11 +446,18 @@ class ChargePoint(ChargePointV16):
         status_timestamp = None
         if timestamp:
             if isinstance(timestamp, str):
-                status_timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                status_timestamp = parse_ocpp_timestamp(timestamp)
             else:
-                status_timestamp = timestamp
+                # If it's already a datetime object, ensure it's timezone-naive UTC
+                if hasattr(timestamp, "tzinfo") and timestamp.tzinfo is not None:
+                    status_timestamp = timestamp.astimezone(timezone.utc).replace(
+                        tzinfo=None
+                    )
+                else:
+                    status_timestamp = timestamp
         else:
-            status_timestamp = datetime.utcnow()
+            # Use current UTC time as timezone-naive
+            status_timestamp = utc_now_naive()
 
         # Store status notification in database
         async with AsyncSessionLocal() as session:
@@ -475,8 +487,10 @@ class ChargePoint(ChargePointV16):
                 # Update charge point's overall status if this is connector 0
                 if connector_id == 0 and charge_point:
                     charge_point.status = status
-                    charge_point.updated_at = datetime.utcnow()
-                    logger.info(f"Updated charge point {self.id} overall status to: {status}")
+                    charge_point.updated_at = utc_now_naive()
+                    logger.info(
+                        f"Updated charge point {self.id} overall status to: {status}"
+                    )
 
                 await session.commit()
                 logger.info(
@@ -492,7 +506,13 @@ class ChargePoint(ChargePointV16):
                     )
 
                 # Log status transitions that indicate charging activity
-                if status in ["Preparing", "Charging", "SuspendedEV", "SuspendedEVSE", "Finishing"]:
+                if status in [
+                    "Preparing",
+                    "Charging",
+                    "SuspendedEV",
+                    "SuspendedEVSE",
+                    "Finishing",
+                ]:
                     logger.info(
                         f"Connector {connector_id} on {self.id} is now {status} "
                         f"({info or 'No additional info'})"
@@ -505,6 +525,100 @@ class ChargePoint(ChargePointV16):
 
         # Return OCPP 1.6 compliant response (empty response)
         return call_result.StatusNotification()
+
+    @on("RemoteStartTransaction")
+    async def on_remote_start_transaction(self, id_tag, **kwargs):
+        """Handle RemoteStartTransaction requests from Central System."""
+        connector_id = kwargs.get("connector_id")
+        charging_profile = kwargs.get("charging_profile")
+
+        logger.info(
+            f"RemoteStartTransaction received from Central System for {self.id}: "
+            f"idTag={id_tag}, connectorId={connector_id}"
+        )
+
+        # Default response status
+        status = "Rejected"
+
+        async with AsyncSessionLocal() as session:
+            try:
+                # Validate the ID tag first
+                id_tag_info = await self._get_id_tag_info(id_tag)
+
+                if id_tag_info["status"] != "Accepted":
+                    logger.info(
+                        f"RemoteStartTransaction rejected for {id_tag}: {id_tag_info['status']}"
+                    )
+                    status = "Rejected"
+                else:
+                    # Check charge point status
+                    charge_point = await session.get(ChargePointModel, self.id)
+                    if not charge_point or not charge_point.is_online:
+                        logger.warning(
+                            f"RemoteStartTransaction rejected: charge point {self.id} is offline"
+                        )
+                        status = "Rejected"
+                    else:
+                        # If connector_id is specified, check if it's available
+                        if connector_id is not None:
+                            # Check connector status
+                            connector_status_result = await session.execute(
+                                select(ConnectorStatus)
+                                .where(ConnectorStatus.charge_point_id == self.id)
+                                .where(ConnectorStatus.connector_id == connector_id)
+                                .order_by(ConnectorStatus.timestamp.desc())
+                                .limit(1)
+                            )
+                            latest_status = connector_status_result.scalar_one_or_none()
+
+                            if latest_status and latest_status.status not in [
+                                "Available",
+                                "Preparing",
+                            ]:
+                                logger.info(
+                                    f"RemoteStartTransaction rejected: connector {connector_id} "
+                                    f"is {latest_status.status}"
+                                )
+                                status = "Rejected"
+                            else:
+                                status = "Accepted"
+                                logger.info(
+                                    f"RemoteStartTransaction accepted for connector {connector_id}"
+                                )
+                        else:
+                            # No specific connector requested - find an available one
+                            # For simplicity, we'll accept if charge point is online
+                            status = "Accepted"
+                            logger.info(
+                                "RemoteStartTransaction accepted (no specific connector)"
+                            )
+
+                        # If accepted, we would typically trigger the charge point to:
+                        # 1. Send StatusNotification (Preparing)
+                        # 2. Automatically start a transaction
+                        # 3. Send StartTransaction request
+                        # For now, we'll just log this and let the charge point handle it
+
+                        if status == "Accepted":
+                            logger.info(
+                                f"Charge point {self.id} should now prepare for transaction "
+                                f"with idTag {id_tag}"
+                            )
+
+                            # Log charging profile if provided
+                            if charging_profile:
+                                logger.info(
+                                    f"Charging profile provided: ID={charging_profile.get('chargingProfileId')}, "
+                                    f"purpose={charging_profile.get('chargingProfilePurpose')}"
+                                )
+
+            except Exception as e:
+                logger.error(f"Failed to process RemoteStartTransaction: {e}")
+                await session.rollback()
+                status = "Rejected"
+
+        # Return OCPP 1.6 compliant response
+        return call_result.RemoteStartTransaction(status=status)
 
     async def _get_id_tag_info(self, id_tag):
         """Helper method to get ID tag info (shared between Authorize and StartTransaction)."""
@@ -522,7 +636,7 @@ class ChargePoint(ChargePointV16):
                     # Check if tag is expired
                     if (
                         tag_record.expiry_date
-                        and tag_record.expiry_date < datetime.utcnow()
+                        and tag_record.expiry_date < utc_now_naive()
                     ):
                         id_tag_info = {
                             "status": "Expired",

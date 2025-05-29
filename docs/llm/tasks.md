@@ -145,6 +145,13 @@ Each task is small, testable, and focused on a single feature or message defined
 - Dockerize services: API, WebSocket, Postgres
 - Simulate charger sessions from boot → stop
 
+🚀 Next Steps for Production:
+• Integrate Central System into server process
+• Add REST API for external Central System control
+• Implement WebSocket API for real-time operations
+• Add authentication and authorization
+• Implement load management and smart charging
+
 ---
 
 This updated plan ensures Voltaro aligns with the full OCPP 1.6 Core Profile.
