@@ -620,6 +620,135 @@ class ChargePoint(ChargePointV16):
         # Return OCPP 1.6 compliant response
         return call_result.RemoteStartTransaction(status=status)
 
+    @on("RemoteStopTransaction")
+    async def on_remote_stop_transaction(self, transaction_id):
+        """
+        Handle RemoteStopTransaction requests from Central System.
+
+        According to OCPP 1.6 Section 5.12:
+        - Validate that transaction exists and is active
+        - Return Accepted if transaction can be stopped
+        - Return Rejected if transaction doesn't exist or cannot be stopped
+        - If Accepted, automatically trigger StopTransaction flow
+        """
+        logger.info(
+            f"RemoteStopTransaction received from Central System for {self.id}: "
+            f"transactionId={transaction_id}"
+        )
+
+        # Default response status
+        status = "Rejected"
+
+        async with AsyncSessionLocal() as session:
+            try:
+                # Validate that the transaction exists and is active
+                session_result = await session.execute(
+                    select(Session)
+                    .where(Session.transaction_id == transaction_id)
+                    .where(Session.charge_point_id == self.id)
+                )
+                session_record = session_result.scalar_one_or_none()
+
+                if not session_record:
+                    logger.info(
+                        f"RemoteStopTransaction rejected: transaction {transaction_id} "
+                        f"not found for charge point {self.id}"
+                    )
+                    status = "Rejected"
+                elif session_record.status != "Active":
+                    logger.info(
+                        f"RemoteStopTransaction rejected: transaction {transaction_id} "
+                        f"is not active (status: {session_record.status})"
+                    )
+                    status = "Rejected"
+                else:
+                    # Transaction exists and is active - accept the request
+                    status = "Accepted"
+                    logger.info(
+                        f"RemoteStopTransaction accepted for transaction {transaction_id} "
+                        f"on connector {session_record.connector_id}"
+                    )
+
+                    # According to OCPP spec: "This remote request to stop a transaction
+                    # is equal to a local action to stop a transaction. Therefore, the
+                    # transaction SHALL be stopped"
+
+                    # Schedule automatic StopTransaction to be sent after response
+                    # This simulates the charge point automatically stopping the transaction
+                    asyncio.create_task(
+                        self._send_automatic_stop_transaction(
+                            transaction_id,
+                            session_record.connector_id,
+                            session_record.meter_start or 0,
+                        )
+                    )
+
+            except Exception as e:
+                logger.error(f"Failed to process RemoteStopTransaction: {e}")
+                await session.rollback()
+                status = "Rejected"
+
+        # Return OCPP 1.6 compliant response
+        return call_result.RemoteStopTransaction(status=status)
+
+    async def _send_automatic_stop_transaction(
+        self, transaction_id: int, connector_id: int, meter_start: int
+    ):
+        """
+        Automatically send StopTransaction after RemoteStopTransaction is accepted.
+
+        This simulates the charge point stopping the transaction as required by OCPP spec.
+        """
+        try:
+            # Wait a moment to ensure the RemoteStopTransaction response is sent first
+            await asyncio.sleep(1.0)
+
+            # Calculate a realistic meter stop value (simulate some energy consumption)
+            # In a real charge point, this would come from the actual meter
+            meter_stop = meter_start + random.randint(1000, 5000)  # Add 1-5 kWh
+
+            logger.info(
+                f"Automatically stopping transaction {transaction_id} on connector {connector_id} "
+                f"(meter: {meter_start} -> {meter_stop} Wh)"
+            )
+
+            # Send StopTransaction request as required by OCPP spec
+            request = call.StopTransaction(
+                transaction_id=transaction_id,
+                meter_stop=meter_stop,
+                timestamp=utc_now_iso(),
+                reason="Remote",  # Indicate this was a remote stop
+            )
+
+            response = await self.call(request)
+            logger.info(
+                f"Automatic StopTransaction sent for transaction {transaction_id}: "
+                f"response received"
+            )
+
+            # Send StatusNotification to indicate connector is now available
+            # This simulates the connector becoming available after transaction stops
+            await asyncio.sleep(0.5)  # Small delay between messages
+
+            status_request = call.StatusNotification(
+                connector_id=connector_id,
+                error_code="NoError",
+                status="Available",
+                info="Transaction stopped remotely",
+                timestamp=utc_now_iso(),
+            )
+
+            await self.call(status_request)
+            logger.info(
+                f"StatusNotification sent: connector {connector_id} now Available "
+                f"after remote stop"
+            )
+
+        except Exception as e:
+            logger.error(
+                f"Failed to send automatic StopTransaction for {transaction_id}: {e}"
+            )
+
     async def _get_id_tag_info(self, id_tag):
         """Helper method to get ID tag info (shared between Authorize and StartTransaction)."""
         # Default response for unknown/invalid tags

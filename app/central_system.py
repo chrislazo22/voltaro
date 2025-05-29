@@ -12,7 +12,7 @@ from app.connection_manager import (
     get_database_connection_status,
 )
 from app.database import AsyncSessionLocal
-from app.models import ChargePoint as ChargePointModel, IdTag
+from app.models import ChargePoint as ChargePointModel, IdTag, Session
 from app.utils import utc_now_iso, utc_now_naive
 from sqlalchemy import select
 
@@ -137,6 +137,49 @@ class CentralSystem:
             f"Central System initiating RemoteStopTransaction to {charge_point_id}: "
             f"transactionId={transaction_id}"
         )
+
+        # Validate transaction exists and is active before sending request
+        async with AsyncSessionLocal() as session:
+            try:
+                # Check if transaction exists and belongs to the specified charge point
+                session_result = await session.execute(
+                    select(Session)
+                    .where(Session.transaction_id == transaction_id)
+                    .where(Session.charge_point_id == charge_point_id)
+                )
+                session_record = session_result.scalar_one_or_none()
+
+                if not session_record:
+                    logger.error(
+                        f"Transaction {transaction_id} not found for charge point {charge_point_id}"
+                    )
+                    return {
+                        "success": False,
+                        "error": f"Transaction {transaction_id} not found for charge point {charge_point_id}",
+                        "status": "Rejected",
+                    }
+
+                if session_record.status != "Active":
+                    logger.error(
+                        f"Transaction {transaction_id} is not active (status: {session_record.status})"
+                    )
+                    return {
+                        "success": False,
+                        "error": f"Transaction {transaction_id} is not active (status: {session_record.status})",
+                        "status": "Rejected",
+                    }
+
+                logger.info(
+                    f"Transaction {transaction_id} validated: Active on connector {session_record.connector_id}"
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to validate transaction {transaction_id}: {e}")
+                return {
+                    "success": False,
+                    "error": f"Failed to validate transaction: {e}",
+                    "status": "Rejected",
+                }
 
         # Get the connected charge point
         charge_point = get_connected_charge_point(charge_point_id)
@@ -320,4 +363,3 @@ async def stop_remote_transaction(charge_point_id: str, transaction_id: int):
 async def get_charge_point_status(charge_point_id: str = None):
     """Convenience function to get charge point status."""
     return await CentralSystem.get_charge_point_status(charge_point_id)
-
