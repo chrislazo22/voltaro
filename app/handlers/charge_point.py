@@ -291,6 +291,139 @@ class ChargePoint(ChargePointV16):
         # Return OCPP 1.6 compliant response (empty response)
         return call_result.MeterValues()
 
+    @on("StopTransaction")
+    async def on_stop_transaction(self, transaction_id, timestamp, meter_stop, **kwargs):
+        """Handle StopTransaction requests - end charging session and store final data."""
+        id_tag = kwargs.get("id_tag")
+        reason = kwargs.get("reason", "Local")
+        transaction_data = kwargs.get("transaction_data", [])
+
+        logger.info(
+            f"StopTransaction received from {self.id}: transaction_id={transaction_id}, "
+            f"meter_stop={meter_stop}, reason={reason}, id_tag={id_tag}"
+        )
+
+        # Default response (no idTagInfo)
+        response_data = {}
+
+        # Parse timestamp
+        if isinstance(timestamp, str):
+            stop_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        else:
+            stop_time = timestamp
+
+        # Update session in database
+        async with AsyncSessionLocal() as session:
+            try:
+                # Find the session by transaction_id
+                session_result = await session.execute(
+                    select(Session).where(Session.transaction_id == transaction_id)
+                )
+                session_record = session_result.scalar_one_or_none()
+
+                if not session_record:
+                    logger.error(
+                        f"Transaction {transaction_id} not found for StopTransaction from {self.id}"
+                    )
+                    # Still return success response as per OCPP spec
+                else:
+                    # Update session with stop data
+                    session_record.meter_stop = meter_stop
+                    session_record.stop_timestamp = stop_time
+                    session_record.status = "Completed"
+                    session_record.stop_reason = reason
+                    session_record.updated_at = datetime.utcnow()
+
+                    # Calculate energy consumed if we have both start and stop values
+                    if session_record.meter_start is not None:
+                        # Convert from Wh to kWh for energy_consumed field
+                        energy_wh = meter_stop - session_record.meter_start
+                        session_record.energy_consumed = energy_wh / 1000.0
+
+                    logger.info(
+                        f"Updated session {transaction_id}: meter_stop={meter_stop}, "
+                        f"energy_consumed={session_record.energy_consumed} kWh"
+                    )
+
+                # Process transaction data (additional meter values) if provided
+                if transaction_data:
+                    logger.info(
+                        f"Processing {len(transaction_data)} transaction data entries"
+                    )
+
+                    for meter_val in transaction_data:
+                        # Parse timestamp
+                        data_timestamp = meter_val.get("timestamp")
+                        if isinstance(data_timestamp, str):
+                            meter_timestamp = datetime.fromisoformat(
+                                data_timestamp.replace("Z", "+00:00")
+                            )
+                        else:
+                            meter_timestamp = data_timestamp or datetime.utcnow()
+
+                        # Process each sampled value
+                        sampled_values = meter_val.get("sampledValue", [])
+
+                        for sampled_val in sampled_values:
+                            # Extract sampled value fields
+                            value = sampled_val.get("value")
+                            context = sampled_val.get("context", "Transaction.End")
+                            format_type = sampled_val.get("format", "Raw")
+                            measurand = sampled_val.get(
+                                "measurand", "Energy.Active.Import.Register"
+                            )
+                            phase = sampled_val.get("phase")
+                            location = sampled_val.get("location", "Outlet")
+                            unit = sampled_val.get("unit", "Wh")
+
+                            # Convert value to float for storage
+                            try:
+                                numeric_value = float(value)
+                            except (ValueError, TypeError):
+                                logger.error(f"Invalid transaction data value: {value}")
+                                continue
+
+                            # Create MeterValue record
+                            meter_value_record = MeterValue(
+                                session_id=session_record.id if session_record else None,
+                                timestamp=meter_timestamp,
+                                value=numeric_value,
+                                unit=unit,
+                                measurand=measurand,
+                                phase=phase,
+                                location=location,
+                                context=context,
+                                format=format_type,
+                            )
+
+                            session.add(meter_value_record)
+
+                            logger.debug(
+                                f"Stored transaction data: {numeric_value} {unit} "
+                                f"({measurand}) at {meter_timestamp}"
+                            )
+
+                # Validate idTag if provided and add to response
+                if id_tag:
+                    id_tag_info = await self._get_id_tag_info(id_tag)
+                    response_data["id_tag_info"] = id_tag_info
+                    logger.info(
+                        f"ID tag {id_tag} validation for stop: {id_tag_info['status']}"
+                    )
+
+                await session.commit()
+                logger.info(
+                    f"Successfully processed StopTransaction for transaction {transaction_id}"
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to process StopTransaction: {e}")
+                await session.rollback()
+                # Continue with response even if DB fails - OCPP spec requirement
+
+        # Return OCPP 1.6 compliant response
+        return call_result.StopTransaction(**response_data)
+
     async def _get_id_tag_info(self, id_tag):
         """Helper method to get ID tag info (shared between Authorize and StartTransaction)."""
         # Default response for unknown/invalid tags

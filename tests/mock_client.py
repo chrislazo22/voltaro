@@ -79,6 +79,39 @@ async def send_messages(cp):
         cp, connector_id=1, transaction_id=123456
     )  # With transaction (if exists)
 
+    # Test StopTransaction
+    print("\n🛑 Testing StopTransaction...")
+
+    # Test stopping a transaction that should exist (if StartTransaction succeeded)
+    await asyncio.sleep(2)
+    await send_stop_transaction(
+        cp,
+        transaction_id=123456,  # Assuming this transaction exists from earlier
+        meter_stop=25000,
+        reason="Local",
+        id_tag="VALID001",
+    )
+
+    # Test stopping with different scenarios
+    await asyncio.sleep(2)
+    await send_stop_transaction(
+        cp,
+        transaction_id=999999,  # Non-existent transaction
+        meter_stop=30000,
+        reason="Remote",
+    )
+
+    # Test stopping with transaction data
+    await asyncio.sleep(2)
+    await send_stop_transaction(
+        cp,
+        transaction_id=123457,  # Another transaction
+        meter_stop=18000,
+        reason="EVDisconnected",
+        id_tag="VALID002",
+        include_transaction_data=True,
+    )
+
 
 async def send_boot_notification(cp):
     print("Sending BootNotification...")
@@ -231,6 +264,74 @@ async def send_meter_values(cp, connector_id, transaction_id=None):
 
     except Exception as e:
         print(f"Failed to send MeterValues: {e}")
+
+
+async def send_stop_transaction(
+    cp, transaction_id, meter_stop, reason, id_tag=None, include_transaction_data=False
+):
+    print(
+        f"Sending StopTransaction request with transaction_id: {transaction_id}, meter_stop: {meter_stop}, reason: {reason}"
+    )
+
+    # Build request parameters
+    request_params = {
+        "transaction_id": transaction_id,
+        "meter_stop": meter_stop,
+        "timestamp": datetime.utcnow().isoformat(),
+        "reason": reason,
+    }
+
+    # Add optional id_tag if provided
+    if id_tag:
+        request_params["id_tag"] = id_tag
+        print(f"  Including id_tag: {id_tag}")
+
+    # Add optional transaction_data if requested
+    if include_transaction_data:
+        print("  Including transaction data (meter values)")
+        transaction_data = [
+            {
+                "timestamp": datetime.utcnow().isoformat(),
+                "sampledValue": [
+                    {
+                        "value": str(meter_stop),
+                        "context": "Transaction.End",
+                        "measurand": "Energy.Active.Import.Register",
+                        "unit": "Wh",
+                        "location": "Outlet",
+                    },
+                    {
+                        "value": "0.0",
+                        "context": "Transaction.End",
+                        "measurand": "Power.Active.Import",
+                        "unit": "kW",
+                        "location": "Outlet",
+                    },
+                ],
+            }
+        ]
+        request_params["transaction_data"] = transaction_data
+
+    request = call.StopTransaction(**request_params)
+
+    try:
+        response = await cp.call(request)
+        print(f"StopTransaction response: {response}")
+
+        # Check if response contains id_tag_info
+        if hasattr(response, "id_tag_info") and response.id_tag_info:
+            print(f"  ID Tag Info Status: {response.id_tag_info['status']}")
+            if "expiryDate" in response.id_tag_info:
+                print(f"  Expiry Date: {response.id_tag_info['expiryDate']}")
+            if "parentIdTag" in response.id_tag_info:
+                print(f"  Parent Tag: {response.id_tag_info['parentIdTag']}")
+        else:
+            print("  No ID tag info in response")
+
+        print("  ✅ Transaction stopped successfully")
+
+    except Exception as e:
+        print(f"Failed to send StopTransaction request: {e}")
 
 
 if __name__ == "__main__":
