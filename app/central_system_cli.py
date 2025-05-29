@@ -19,6 +19,7 @@ class CentralSystemCLI:
 
     def __init__(self):
         self.running = False
+        self.central_system = CentralSystem()  # Instance for non-static methods
 
     async def start(self):
         """Start the CLI interface."""
@@ -35,8 +36,24 @@ class CentralSystemCLI:
         )
         print("  stop <cp_id> <tx_id>      - Remote stop transaction")
         print("  validate <id_tag>         - Validate ID tag")
+        print("  list_charge_points        - Show all registered charge points")
+        print(
+            "  remote_start <cp_id> <id_tag> [connector_id] - Start remote transaction"
+        )
+        print("  remote_stop <tx_id>       - Stop remote transaction")
+        print(
+            "  change_availability <cp_id> <connector_id> <type> - Change connector availability"
+        )
         print("  help                      - Show this help")
         print("  quit                      - Exit CLI")
+        print()
+        print("Examples:")
+        print("  remote_start CP001 VALID001")
+        print("  remote_start CP001 VALID001 1")
+        print("  remote_stop 12345")
+        print("  change_availability CP001 1 Inoperative")
+        print("  change_availability CP001 0 Operative")
+        print()
         print("=" * 60)
 
         while self.running:
@@ -94,6 +111,18 @@ class CentralSystemCLI:
         elif cmd == "validate":
             await self._validate_tag(parts[1:])
 
+        elif cmd == "list_charge_points":
+            await self._list_charge_points()
+
+        elif cmd == "remote_start":
+            await self._remote_start(parts[1:])
+
+        elif cmd == "remote_stop":
+            await self._remote_stop(parts[1:])
+
+        elif cmd == "change_availability":
+            await self._change_availability(parts[1:])
+
         else:
             print(f"❌ Unknown command: {cmd}")
             print("Type 'help' for available commands")
@@ -108,6 +137,11 @@ class CentralSystemCLI:
         print("start CP001 VALID001 2     - Start transaction on connector 2")
         print("stop CP001 123456          - Stop transaction 123456")
         print("validate VALID001          - Check if ID tag is valid")
+        print("list_charge_points         - Show all registered charge points")
+        print("remote_start CP001 VALID001 - Start remote transaction")
+        print("remote_stop 12345          - Stop remote transaction")
+        print("change_availability CP001 1 Inoperative - Change connector availability")
+        print("change_availability CP001 0 Operative - Change connector availability")
         print("help                       - Show this help")
         print("quit                       - Exit CLI")
         print()
@@ -208,6 +242,7 @@ class CentralSystemCLI:
                 print(f"   ✅ Response: {result['status']}")
                 if result["status"] == "Accepted":
                     print("   🎉 Transaction stop request accepted!")
+                    print("   📊 Watch for StopTransaction message...")
                 else:
                     print(f"   ⚠️ Request was rejected by charge point")
             else:
@@ -231,16 +266,45 @@ class CentralSystemCLI:
             result = await CentralSystem.validate_id_tag(id_tag)
 
             status_icon = "✅" if result["status"] == "Accepted" else "❌"
-            print(f"   {status_icon} Status: {result['status']}")
-
+            print(f"   {status_icon} ID Tag: {id_tag}")
+            print(f"   Status: {result['status']}")
             if result.get("reason"):
-                print(f"   📝 Reason: {result['reason']}")
+                print(f"   Reason: {result['reason']}")
 
-            if result.get("expiry_date"):
-                print(f"   📅 Expires: {result['expiry_date']}")
+        except Exception as e:
+            print(f"   ❌ Error: {e}")
+        print()
 
-            if result.get("parent_id_tag"):
-                print(f"   👨‍👩‍👧‍👦 Parent Tag: {result['parent_id_tag']}")
+    async def _change_availability(self, args):
+        """Handle change availability command."""
+        if len(args) < 3:
+            print(
+                "❌ Usage: change_availability <charge_point_id> <connector_id> <type>"
+            )
+            return
+
+        cp_id = args[0]
+        connector_id = int(args[1])
+        type = args[2]
+
+        print(f"\n🔄 Changing Availability:")
+        print(f"   Charge Point: {cp_id}")
+        print(f"   Connector: {connector_id}")
+        print(f"   Type: {type}")
+
+        try:
+            result = await self.central_system.change_availability(
+                charge_point_id=cp_id, connector_id=connector_id, availability_type=type
+            )
+
+            if result["status"] in ["Accepted", "Scheduled"]:
+                print(f"   ✅ Response: {result['status']}")
+                if result["status"] == "Accepted":
+                    print("   🎉 Change availability request accepted!")
+                elif result["status"] == "Scheduled":
+                    print("   ⏰ Change scheduled (transaction in progress)")
+            else:
+                print(f"   ❌ Request rejected: {result.get('error', 'Unknown error')}")
 
         except Exception as e:
             print(f"   ❌ Error: {e}")
@@ -263,4 +327,3 @@ def is_cli_running():
     """Check if CLI is running."""
     global _cli_instance
     return _cli_instance is not None and _cli_instance.running
-

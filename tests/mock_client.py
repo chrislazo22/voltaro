@@ -12,6 +12,46 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.utils import utc_now_iso
 
 
+class MockClient:
+    """Mock client for testing OCPP functionality."""
+
+    def __init__(self, charge_point_id):
+        self.charge_point_id = charge_point_id
+        self.charge_point = None
+        self.websocket = None
+
+    async def start(self):
+        """Connect and start the mock charge point."""
+        import websockets
+
+        uri = f"ws://localhost:9000/{self.charge_point_id}"
+        try:
+            self.websocket = await websockets.connect(uri, subprotocols=["ocpp1.6"])
+            self.charge_point = ChargePoint(self.charge_point_id, self.websocket)
+
+            # Start listening for messages in background
+            self._message_task = asyncio.create_task(self.charge_point.start())
+
+            # Send BootNotification
+            await send_boot_notification(self.charge_point)
+
+            return self.charge_point
+        except Exception as e:
+            print(f"Failed to connect mock client {self.charge_point_id}: {e}")
+            raise
+
+    async def stop(self):
+        """Stop and disconnect the mock charge point."""
+        if hasattr(self, "_message_task"):
+            self._message_task.cancel()
+            try:
+                await self._message_task
+            except asyncio.CancelledError:
+                pass
+        if self.websocket:
+            await self.websocket.close()
+
+
 class ChargePoint(ChargePointV16):
     """Mock charge point that can handle Central System requests."""
 
@@ -57,6 +97,37 @@ class ChargePoint(ChargePointV16):
 
         return call_result.RemoteStopTransaction(status="Accepted")
 
+    @on("ChangeAvailability")
+    async def on_change_availability(self, connector_id, type):
+        """Handle ChangeAvailability requests from Central System."""
+        print(f"\n🔄 Received ChangeAvailability request:")
+        print(f"  Connector ID: {connector_id}")
+        print(f"  Type: {type}")
+
+        # Simulate charge point logic
+        if connector_id < 0 or connector_id > 1:
+            print(f"  ❌ Rejecting request: Invalid connector_id {connector_id}")
+            return call_result.ChangeAvailability(status="Rejected")
+
+        if type not in ["Operative", "Inoperative"]:
+            print(f"  ❌ Rejecting request: Invalid type {type}")
+            return call_result.ChangeAvailability(status="Rejected")
+
+        print(f"  ✅ Accepting ChangeAvailability request")
+
+        # Schedule StatusNotification to be sent after response
+        connector_label = (
+            "ChargePoint" if connector_id == 0 else f"Connector {connector_id}"
+        )
+        print(f"  📊 {connector_label} availability changing to {type}")
+
+        # Send StatusNotification after a delay
+        asyncio.create_task(
+            self._send_availability_status_notification(connector_id, type)
+        )
+
+        return call_result.ChangeAvailability(status="Accepted")
+
     async def _send_status_preparing_delayed(self, connector_id):
         """Send StatusNotification for Preparing state after a short delay."""
         try:
@@ -91,6 +162,35 @@ class ChargePoint(ChargePointV16):
             print(
                 f"  📊 Sent StatusNotification: Preparing for connector {connector_id}"
             )
+        except Exception as e:
+            print(f"  ❌ Failed to send StatusNotification: {e}")
+
+    async def _send_availability_status_notification(
+        self, connector_id, availability_type
+    ):
+        """Send StatusNotification after availability change."""
+        try:
+            await asyncio.sleep(1.0)  # Wait for response to be sent first
+
+            # Determine status based on availability
+            status = "Available" if availability_type == "Operative" else "Unavailable"
+            info = f"Availability changed to {availability_type}"
+
+            connector_label = (
+                "ChargePoint" if connector_id == 0 else f"Connector {connector_id}"
+            )
+
+            request = call.StatusNotification(
+                connector_id=connector_id,
+                error_code="NoError",
+                status=status,
+                info=info,
+                timestamp=utc_now_iso(),
+            )
+
+            await self.call(request)
+            print(f"  📊 StatusNotification sent: {connector_label} now {status}")
+
         except Exception as e:
             print(f"  ❌ Failed to send StatusNotification: {e}")
 

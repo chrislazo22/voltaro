@@ -344,6 +344,111 @@ class CentralSystem:
                     "error": str(e),
                 }
 
+    async def change_availability(
+        self, charge_point_id: str, connector_id: int, availability_type: str
+    ):
+        """
+        Send ChangeAvailability request to a charge point.
+
+        According to OCPP 1.6 Section 5.2:
+        - Central System can request a Charge Point to change its availability
+        - availability_type: "Operative" (available) or "Inoperative" (unavailable)
+        - connector_id: 0 for entire charge point, >0 for specific connector
+        - Response: "Accepted", "Rejected", or "Scheduled"
+
+        Args:
+            charge_point_id: Target charge point identifier
+            connector_id: 0 for charge point, 1+ for specific connector (MVP: 0 or 1)
+            availability_type: "Operative" or "Inoperative"
+
+        Returns:
+            dict: Response with status and details
+        """
+        logger.info(
+            f"Sending ChangeAvailability to {charge_point_id}: "
+            f"connectorId={connector_id}, type={availability_type}"
+        )
+
+        # Validate inputs
+        if availability_type not in ["Operative", "Inoperative"]:
+            logger.error(f"Invalid availability type: {availability_type}")
+            return {
+                "status": "Rejected",
+                "error": f"Invalid availability type: {availability_type}",
+            }
+
+        # MVP: Validate connector_id (0 = charge point, 1 = single connector)
+        if connector_id < 0 or connector_id > 1:
+            logger.error(f"Invalid connector_id: {connector_id} (MVP supports 0 or 1)")
+            return {
+                "status": "Rejected",
+                "error": f"Invalid connector_id: {connector_id} (MVP supports 0 or 1)",
+            }
+
+        async with AsyncSessionLocal() as session:
+            try:
+                # Validate charge point exists and is online
+                charge_point = await session.get(ChargePointModel, charge_point_id)
+                if not charge_point:
+                    logger.warning(f"Charge point not found: {charge_point_id}")
+                    return {
+                        "status": "Rejected",
+                        "error": f"Charge point not found: {charge_point_id}",
+                    }
+
+                if not charge_point.is_online:
+                    logger.warning(f"Charge point offline: {charge_point_id}")
+                    return {
+                        "status": "Rejected",
+                        "error": f"Charge point offline: {charge_point_id}",
+                    }
+
+                # Get charge point connection
+                charge_point_connection = get_connected_charge_point(charge_point_id)
+                if not charge_point_connection:
+                    logger.warning(f"No active connection for: {charge_point_id}")
+                    return {
+                        "status": "Rejected",
+                        "error": f"No active connection for: {charge_point_id}",
+                    }
+
+                # Send ChangeAvailability request
+                request = call.ChangeAvailability(
+                    connector_id=connector_id, type=availability_type
+                )
+
+                try:
+                    response = await charge_point_connection.call(request)
+
+                    logger.info(
+                        f"ChangeAvailability response from {charge_point_id}: {response.status}"
+                    )
+
+                    return {
+                        "status": response.status,
+                        "charge_point_id": charge_point_id,
+                        "connector_id": connector_id,
+                        "availability_type": availability_type,
+                        "timestamp": utc_now_iso(),
+                    }
+
+                except Exception as call_error:
+                    logger.error(
+                        f"Failed to send ChangeAvailability to {charge_point_id}: {call_error}"
+                    )
+                    return {
+                        "status": "Rejected",
+                        "error": f"Communication error: {str(call_error)}",
+                    }
+
+            except Exception as e:
+                logger.error(f"Failed to process ChangeAvailability request: {e}")
+                await session.rollback()
+                return {
+                    "status": "Rejected",
+                    "error": f"Database error: {str(e)}",
+                }
+
 
 # Convenience functions for easy access
 async def start_remote_transaction(

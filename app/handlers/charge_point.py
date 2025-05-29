@@ -691,6 +691,161 @@ class ChargePoint(ChargePointV16):
         # Return OCPP 1.6 compliant response
         return call_result.RemoteStopTransaction(status=status)
 
+    @on("ChangeAvailability")
+    async def on_change_availability(self, connector_id, type):
+        """
+        Handle ChangeAvailability requests from Central System.
+
+        According to OCPP 1.6 Section 5.2:
+        - Central System can request Charge Point to change availability
+        - Response: "Accepted", "Rejected", or "Scheduled"
+        - "Scheduled" when transaction is in progress
+        - "Accepted" for immediate change or already in requested state
+        - ConnectorId = 0 applies to Charge Point and all connectors
+        - Must persist across reboots and send StatusNotification after change
+
+        MVP: Single ChargePoint with single Connector (connector_id = 1)
+        """
+        logger.info(
+            f"ChangeAvailability received from Central System for {self.id}: "
+            f"connectorId={connector_id}, type={type}"
+        )
+
+        # Default response status
+        status = "Rejected"
+
+        async with AsyncSessionLocal() as session:
+            try:
+                # MVP: Validate connector_id (0 = ChargePoint, 1 = single connector)
+                if connector_id < 0 or connector_id > 1:
+                    logger.info(
+                        f"ChangeAvailability rejected: invalid connector_id {connector_id} "
+                        f"(MVP supports 0=ChargePoint, 1=connector)"
+                    )
+                    status = "Rejected"
+                else:
+                    # Check for active transactions if affecting connector 1
+                    # (connector_id = 0 affects all connectors, including 1)
+                    has_active_transaction = False
+
+                    if connector_id == 0 or connector_id == 1:
+                        # Check if connector 1 has active transaction
+                        active_session_result = await session.execute(
+                            select(Session)
+                            .where(Session.charge_point_id == self.id)
+                            .where(Session.connector_id == 1)
+                            .where(Session.status == "Active")
+                        )
+                        active_session = active_session_result.scalar_one_or_none()
+                        has_active_transaction = active_session is not None
+
+                    if has_active_transaction:
+                        # OCPP: "When a transaction is in progress Charge Point SHALL respond
+                        # with availability status 'Scheduled'"
+                        status = "Scheduled"
+                        logger.info(
+                            f"ChangeAvailability scheduled: transaction in progress on connector 1"
+                        )
+                    else:
+                        # Get current availability state(s)
+                        if connector_id == 0:
+                            # ConnectorId = 0: Apply to ChargePoint and all connectors
+                            target_connectors = [0, 1]
+                        else:
+                            # ConnectorId = 1: Apply to specific connector only
+                            target_connectors = [1]
+
+                        # Check if already in requested state
+                        already_in_state = True
+                        for target_connector_id in target_connectors:
+                            current_status_result = await session.execute(
+                                select(ConnectorStatus)
+                                .where(ConnectorStatus.charge_point_id == self.id)
+                                .where(
+                                    ConnectorStatus.connector_id == target_connector_id
+                                )
+                                .order_by(ConnectorStatus.created_at.desc())
+                                .limit(1)
+                            )
+                            current_status = current_status_result.scalar_one_or_none()
+
+                            if (
+                                not current_status
+                                or current_status.availability != type
+                            ):
+                                already_in_state = False
+                                break
+
+                        if already_in_state:
+                            # OCPP: "In the event that Central System requests Charge Point to change
+                            # to a status it is already in, Charge Point SHALL respond with
+                            # availability status 'Accepted'"
+                            status = "Accepted"
+                            logger.info(
+                                f"ChangeAvailability accepted: already in {type} state"
+                            )
+                        else:
+                            # Apply availability change immediately
+                            for target_connector_id in target_connectors:
+                                # Update the latest ConnectorStatus record for this connector
+                                latest_status_result = await session.execute(
+                                    select(ConnectorStatus)
+                                    .where(ConnectorStatus.charge_point_id == self.id)
+                                    .where(
+                                        ConnectorStatus.connector_id
+                                        == target_connector_id
+                                    )
+                                    .order_by(ConnectorStatus.created_at.desc())
+                                    .limit(1)
+                                )
+                                latest_status = (
+                                    latest_status_result.scalar_one_or_none()
+                                )
+
+                                if latest_status:
+                                    # Update existing record
+                                    latest_status.availability = type
+                                else:
+                                    # Create new record if none exists
+                                    new_status = ConnectorStatus(
+                                        charge_point_id=self.id,
+                                        connector_id=target_connector_id,
+                                        status=(
+                                            "Available"
+                                            if type == "Operative"
+                                            else "Unavailable"
+                                        ),
+                                        error_code="NoError",
+                                        availability=type,
+                                        timestamp=utc_now_naive(),
+                                    )
+                                    session.add(new_status)
+
+                            await session.commit()
+                            status = "Accepted"
+                            logger.info(
+                                f"ChangeAvailability accepted: updated connector(s) {target_connectors} "
+                                f"to {type}"
+                            )
+
+                            # Schedule StatusNotification to be sent after response
+                            # OCPP: "When an availability change requested with a ChangeAvailability.req
+                            # PDU has happened, the Charge Point SHALL inform Central System of its new
+                            # availability status with a StatusNotification.req"
+                            asyncio.create_task(
+                                self._send_availability_status_notifications(
+                                    target_connectors, type
+                                )
+                            )
+
+            except Exception as e:
+                logger.error(f"Failed to process ChangeAvailability: {e}")
+                await session.rollback()
+                status = "Rejected"
+
+        # Return OCPP 1.6 compliant response
+        return call_result.ChangeAvailability(status=status)
+
     async def _send_automatic_stop_transaction(
         self, transaction_id: int, connector_id: int, meter_start: int
     ):
@@ -812,3 +967,60 @@ class ChargePoint(ChargePointV16):
 
             if not existing:
                 return transaction_id
+
+    async def _send_availability_status_notifications(
+        self, connector_ids, availability_type
+    ):
+        """
+        Send StatusNotification messages after availability changes.
+
+        According to OCPP 1.6 Section 5.2:
+        "When an availability change requested with a ChangeAvailability.req PDU has happened,
+        the Charge Point SHALL inform Central System of its new availability status with a
+        StatusNotification.req"
+
+        Args:
+            connector_ids: List of connector IDs that changed availability
+            availability_type: "Operative" or "Inoperative"
+        """
+        try:
+            # Wait a moment to ensure ChangeAvailability response is sent first
+            await asyncio.sleep(1.0)
+
+            for connector_id in connector_ids:
+                # Determine status based on availability
+                if availability_type == "Operative":
+                    # Operative connectors are typically "Available" unless charging
+                    status = "Available"
+                    info = "Connector set to operative"
+                else:
+                    # Inoperative connectors are "Unavailable"
+                    status = "Unavailable"
+                    info = "Connector set to inoperative"
+
+                logger.info(
+                    f"Sending StatusNotification for connector {connector_id}: "
+                    f"status={status}, availability={availability_type}"
+                )
+
+                # Send StatusNotification to inform Central System
+                status_request = call.StatusNotification(
+                    connector_id=connector_id,
+                    error_code="NoError",
+                    status=status,
+                    info=info,
+                    timestamp=utc_now_iso(),
+                )
+
+                await self.call(status_request)
+                logger.info(
+                    f"StatusNotification sent: connector {connector_id} now {status} "
+                    f"(availability: {availability_type})"
+                )
+
+                # Small delay between notifications
+                if len(connector_ids) > 1:
+                    await asyncio.sleep(0.2)
+
+        except Exception as e:
+            logger.error(f"Failed to send availability StatusNotifications: {e}")

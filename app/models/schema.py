@@ -221,6 +221,11 @@ class ConnectorStatus(Base):
     )  # Available, Preparing, Charging, etc.
     error_code: Mapped[str] = mapped_column(String(30))  # NoError, InternalError, etc.
 
+    # OCPP ChangeAvailability field
+    availability: Mapped[str] = mapped_column(
+        String(20), default="Operative"
+    )  # Operative, Inoperative (per OCPP 1.6 Section 5.2)
+
     # Optional StatusNotification fields
     timestamp: Mapped[Optional[datetime]] = mapped_column(DateTime)
     info: Mapped[Optional[str]] = mapped_column(String(50))  # Additional information
