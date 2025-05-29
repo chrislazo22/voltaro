@@ -4,6 +4,11 @@ Test script to verify StopTransaction database operations.
 Run this after running the mock client to see if sessions were properly stopped.
 """
 
+import sys
+import os
+# Add parent directory to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import asyncio
 from datetime import datetime
 from app.database import AsyncSessionLocal

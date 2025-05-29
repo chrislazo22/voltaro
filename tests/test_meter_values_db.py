@@ -1,12 +1,17 @@
+#!/usr/bin/env python3
 """
-Test script to verify MeterValues are properly stored in database.
-Run this after sending MeterValues requests from the mock client.
+Test script to verify MeterValues database operations.
 """
+
+import sys
+import os
+# Add parent directory to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import asyncio
 from app.database import AsyncSessionLocal, close_db
 from app.models import MeterValue, Session, ChargePoint
-from sqlalchemy import select, func
+from sqlalchemy import select, func, desc
 from loguru import logger
 
 

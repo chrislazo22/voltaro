@@ -1,7 +1,13 @@
+#!/usr/bin/env python3
 """
-Simple test to verify database connection.
-Run this after setting up PostgreSQL.
+Test script to verify database connection.
 """
+
+import sys
+import os
+# Add parent directory to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import asyncio
 from app.database import engine, init_db, close_db
 from loguru import logger

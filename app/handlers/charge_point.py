@@ -5,7 +5,7 @@ from ocpp.v16 import ChargePoint as ChargePointV16
 from ocpp.v16 import call_result
 from ocpp.routing import on
 from app.database import AsyncSessionLocal
-from app.models import ChargePoint as ChargePointModel, IdTag, Session, MeterValue
+from app.models import ChargePoint as ChargePointModel, IdTag, Session, MeterValue, ConnectorStatus
 from sqlalchemy import select
 import random
 
@@ -423,6 +423,88 @@ class ChargePoint(ChargePointV16):
 
         # Return OCPP 1.6 compliant response
         return call_result.StopTransaction(**response_data)
+
+    @on("StatusNotification")
+    async def on_status_notification(self, connector_id, error_code, status, **kwargs):
+        """Handle StatusNotification requests - track connector status changes."""
+        timestamp = kwargs.get("timestamp")
+        info = kwargs.get("info")
+        vendor_id = kwargs.get("vendor_id")
+        vendor_error_code = kwargs.get("vendor_error_code")
+
+        logger.info(
+            f"StatusNotification received from {self.id}: connector_id={connector_id}, "
+            f"status={status}, error_code={error_code}, info={info}"
+        )
+
+        # Parse timestamp if provided
+        status_timestamp = None
+        if timestamp:
+            if isinstance(timestamp, str):
+                status_timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            else:
+                status_timestamp = timestamp
+        else:
+            status_timestamp = datetime.utcnow()
+
+        # Store status notification in database
+        async with AsyncSessionLocal() as session:
+            try:
+                # Verify charge point exists
+                charge_point = await session.get(ChargePointModel, self.id)
+                if not charge_point:
+                    logger.warning(
+                        f"Received StatusNotification from unknown charge point: {self.id}"
+                    )
+                    # Still process the notification for logging purposes
+
+                # Create status notification record
+                status_record = ConnectorStatus(
+                    charge_point_id=self.id,
+                    connector_id=connector_id,
+                    status=status,
+                    error_code=error_code,
+                    timestamp=status_timestamp,
+                    info=info,
+                    vendor_id=vendor_id,
+                    vendor_error_code=vendor_error_code,
+                )
+
+                session.add(status_record)
+
+                # Update charge point's overall status if this is connector 0
+                if connector_id == 0 and charge_point:
+                    charge_point.status = status
+                    charge_point.updated_at = datetime.utcnow()
+                    logger.info(f"Updated charge point {self.id} overall status to: {status}")
+
+                await session.commit()
+                logger.info(
+                    f"Stored StatusNotification for {self.id} connector {connector_id}: "
+                    f"{status} ({error_code})"
+                )
+
+                # Log important status changes
+                if error_code != "NoError":
+                    logger.warning(
+                        f"Connector {connector_id} on {self.id} reported error: "
+                        f"{error_code} - {info or 'No additional info'}"
+                    )
+
+                # Log status transitions that indicate charging activity
+                if status in ["Preparing", "Charging", "SuspendedEV", "SuspendedEVSE", "Finishing"]:
+                    logger.info(
+                        f"Connector {connector_id} on {self.id} is now {status} "
+                        f"({info or 'No additional info'})"
+                    )
+
+            except Exception as e:
+                logger.error(f"Failed to store StatusNotification: {e}")
+                await session.rollback()
+                # Continue with response even if DB fails
+
+        # Return OCPP 1.6 compliant response (empty response)
+        return call_result.StatusNotification()
 
     async def _get_id_tag_info(self, id_tag):
         """Helper method to get ID tag info (shared between Authorize and StartTransaction)."""

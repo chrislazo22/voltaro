@@ -1,11 +1,18 @@
+#!/usr/bin/env python3
 """
-Test script to verify BootNotification data storage in database.
-Run this after sending a BootNotification from the mock client.
+Test script to verify BootNotification database operations.
 """
 
+import sys
+import os
+# Add parent directory to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import asyncio
+from datetime import datetime
 from app.database import AsyncSessionLocal, close_db
 from app.models import ChargePoint
+from sqlalchemy import select
 from loguru import logger
 
 

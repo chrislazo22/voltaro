@@ -2,6 +2,11 @@
 Script to add test ID tags to the database for authorization testing.
 """
 
+import sys
+import os
+# Add parent directory to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import asyncio
 from datetime import datetime, timedelta
 from app.database import AsyncSessionLocal, close_db

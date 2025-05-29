@@ -1,6 +1,13 @@
+#!/usr/bin/env python3
 """
-Test script to verify database models and create tables.
+Test script to verify database models.
 """
+
+import sys
+import os
+# Add parent directory to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import asyncio
 from datetime import datetime
 from app.database import init_db, close_db, AsyncSessionLocal

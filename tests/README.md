@@ -6,8 +6,8 @@ This directory contains all test files for the Voltaro OCPP backend.
 
 ### Core Testing
 - **`mock_client.py`** - OCPP 1.6 mock charge point client for end-to-end testing
-  - Tests all implemented OCPP messages: BootNotification, Heartbeat, Authorize, StartTransaction, MeterValues, StopTransaction
-  - Includes various scenarios (valid/invalid tags, different transaction states)
+  - Tests all implemented OCPP messages: BootNotification, Heartbeat, Authorize, StartTransaction, MeterValues, StopTransaction, StatusNotification
+  - Includes various scenarios (valid/invalid tags, different transaction states, connector status transitions)
 
 ### Database Verification Scripts
 - **`test_db_connection.py`** - Basic database connectivity test
@@ -19,6 +19,7 @@ This directory contains all test files for the Voltaro OCPP backend.
 - **`test_start_transaction_db.py`** - Verify StartTransaction session creation
 - **`test_meter_values_db.py`** - Verify MeterValues data storage
 - **`test_stop_transaction_db.py`** - Verify StopTransaction session completion
+- **`test_status_notification_db.py`** - Verify StatusNotification connector status tracking
 
 ### Setup Scripts
 - **`setup_test_tags.py`** - Create test ID tags in database for authorization testing
@@ -40,6 +41,7 @@ python tests/mock_client.py
 python tests/test_boot_notification_db.py
 python tests/test_start_transaction_db.py
 python tests/test_stop_transaction_db.py
+python tests/test_status_notification_db.py
 # ... etc
 ```
 

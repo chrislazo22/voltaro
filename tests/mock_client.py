@@ -109,7 +109,94 @@ async def send_messages(cp):
         meter_stop=18000,
         reason="EVDisconnected",
         id_tag="VALID002",
-        include_transaction_data=True,
+        include_transaction_data=True
+    )
+
+    # Test StatusNotification
+    print("\n📊 Testing StatusNotification...")
+
+    # Test charge point status (connector 0)
+    await asyncio.sleep(2)
+    await send_status_notification(
+        cp,
+        connector_id=0,
+        status="Available",
+        error_code="NoError",
+        info="Charge point online"
+    )
+
+    # Test connector status transitions
+    await asyncio.sleep(1)
+    await send_status_notification(
+        cp,
+        connector_id=1,
+        status="Available",
+        error_code="NoError"
+    )
+
+    await asyncio.sleep(1)
+    await send_status_notification(
+        cp,
+        connector_id=1,
+        status="Preparing",
+        error_code="NoError",
+        info="User initiated charging"
+    )
+
+    await asyncio.sleep(1)
+    await send_status_notification(
+        cp,
+        connector_id=1,
+        status="Charging",
+        error_code="NoError",
+        info="Energy transfer started"
+    )
+
+    await asyncio.sleep(1)
+    await send_status_notification(
+        cp,
+        connector_id=1,
+        status="SuspendedEV",
+        error_code="NoError",
+        info="EV requested pause"
+    )
+
+    await asyncio.sleep(1)
+    await send_status_notification(
+        cp,
+        connector_id=1,
+        status="Finishing",
+        error_code="NoError",
+        info="Transaction completed"
+    )
+
+    await asyncio.sleep(1)
+    await send_status_notification(
+        cp,
+        connector_id=1,
+        status="Available",
+        error_code="NoError"
+    )
+
+    # Test error conditions
+    await asyncio.sleep(1)
+    await send_status_notification(
+        cp,
+        connector_id=2,
+        status="Faulted",
+        error_code="OverCurrentFailure",
+        info="Overcurrent detected on connector 2",
+        vendor_id="MockVendor",
+        vendor_error_code="ERR_001"
+    )
+
+    await asyncio.sleep(1)
+    await send_status_notification(
+        cp,
+        connector_id=2,
+        status="Unavailable",
+        error_code="InternalError",
+        info="Connector disabled for maintenance"
     )
 
 
@@ -332,6 +419,48 @@ async def send_stop_transaction(
 
     except Exception as e:
         print(f"Failed to send StopTransaction request: {e}")
+
+
+async def send_status_notification(
+    cp,
+    connector_id,
+    status,
+    error_code,
+    info=None,
+    vendor_id=None,
+    vendor_error_code=None
+):
+    print(
+        f"Sending StatusNotification request with connector_id: {connector_id}, status: {status}, error_code: {error_code}"
+    )
+    if info:
+        print(f"  Info: {info}")
+    
+    # Build request parameters
+    request_params = {
+        "connector_id": connector_id,
+        "status": status,
+        "error_code": error_code,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    
+    # Add optional fields if provided
+    if info:
+        request_params["info"] = info
+    if vendor_id:
+        request_params["vendor_id"] = vendor_id
+    if vendor_error_code:
+        request_params["vendor_error_code"] = vendor_error_code
+
+    request = call.StatusNotification(**request_params)
+
+    try:
+        response = await cp.call(request)
+        print(f"StatusNotification response: {response}")
+        print("  ✅ Status notification sent successfully")
+
+    except Exception as e:
+        print(f"Failed to send StatusNotification: {e}")
 
 
 if __name__ == "__main__":

@@ -1,12 +1,19 @@
+#!/usr/bin/env python3
 """
 Test script to verify StartTransaction sessions are properly stored in database.
 Run this after sending StartTransaction requests from the mock client.
 """
 
+import sys
+import os
+# Add parent directory to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import asyncio
+from datetime import datetime
 from app.database import AsyncSessionLocal, close_db
 from app.models import Session, ChargePoint, IdTag
-from sqlalchemy import select
+from sqlalchemy import select, desc
 from loguru import logger
 
 

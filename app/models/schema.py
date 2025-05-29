@@ -196,3 +196,41 @@ class MeterValue(Base):
 
     # Relationships
     session: Mapped["Session"] = relationship("Session", back_populates="meter_values")
+
+
+class ConnectorStatus(Base):
+    """
+    Represents the current and historical status of charge point connectors.
+    """
+
+    __tablename__ = "connector_statuses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # Foreign key
+    charge_point_id: Mapped[str] = mapped_column(
+        String(50), ForeignKey("charge_points.id")
+    )
+
+    # Required StatusNotification fields
+    connector_id: Mapped[int] = mapped_column(
+        Integer
+    )  # 0 for charge point, >0 for connectors
+    status: Mapped[str] = mapped_column(
+        String(20)
+    )  # Available, Preparing, Charging, etc.
+    error_code: Mapped[str] = mapped_column(String(30))  # NoError, InternalError, etc.
+
+    # Optional StatusNotification fields
+    timestamp: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    info: Mapped[Optional[str]] = mapped_column(String(50))  # Additional information
+    vendor_id: Mapped[Optional[str]] = mapped_column(String(255))  # Vendor identifier
+    vendor_error_code: Mapped[Optional[str]] = mapped_column(
+        String(50)
+    )  # Vendor-specific error
+
+    # Tracking fields
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    charge_point: Mapped["ChargePoint"] = relationship("ChargePoint")
