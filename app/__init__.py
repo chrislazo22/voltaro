@@ -1,5 +1,5 @@
 """
-Voltaro OCPP Backend Package
+Voltaro API - OCPP Backend Package
 """
 
 __version__ = "0.1.0" 

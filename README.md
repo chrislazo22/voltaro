@@ -1,4 +1,4 @@
-# Voltaro OCPP Backend
+# Voltaro API - OCPP Backend
 
 A Python-based OCPP (Open Charge Point Protocol) backend server for EV charging stations.
 
