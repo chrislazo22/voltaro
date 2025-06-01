@@ -6,7 +6,12 @@ loguru==0.7.3
 pytest==8.3.5
 pytest-asyncio==0.26.0
 
+# FastAPI dependencies
+fastapi==0.115.6
+pydantic==2.10.3
+
 # Database dependencies
 sqlalchemy==2.0.36
 asyncpg==0.30.0
 alembic==1.14.0
+greenlet==3.1.1
