@@ -58,7 +58,7 @@ class ChargePoint(ChargePointV16):
     @on("RemoteStartTransaction")
     async def on_remote_start_transaction(self, id_tag, **kwargs):
         """Handle RemoteStartTransaction requests from Central System."""
-        connector_id = kwargs.get("connector_id")
+        connector_id = kwargs.get("connector_id", 1)  # Default to connector 1
         charging_profile = kwargs.get("charging_profile")
 
         print(f"\n🔋 Received RemoteStartTransaction request:")
@@ -75,11 +75,78 @@ class ChargePoint(ChargePointV16):
 
         print(f"  ✅ Accepting request for {id_tag}")
 
-        # Schedule StatusNotification to be sent after response
-        # This avoids the timeout issue
-        asyncio.create_task(self._send_status_preparing_delayed(connector_id or 1))
+        # Schedule the full OCPP flow after accepting the request
+        asyncio.create_task(self._handle_remote_start_flow(id_tag, connector_id))
 
         return call_result.RemoteStartTransaction(status="Accepted")
+
+    async def _handle_remote_start_flow(self, id_tag, connector_id):
+        """Handle the complete flow after accepting RemoteStartTransaction."""
+        try:
+            # Step 1: Send StatusNotification (Preparing)
+            await asyncio.sleep(0.5)  # Brief delay to ensure response is sent first
+            
+            await self._send_status_notification_simple(
+                connector_id, "Preparing", "Remote start initiated"
+            )
+            
+            # Step 2: Simulate authorization check (if AuthorizeRemoteTxRequests = true)
+            # For this demo, we'll skip Authorize.req and go straight to StartTransaction
+            await asyncio.sleep(1.0)  # Simulate preparation time
+            
+            # Step 3: Send StartTransaction.req (this is required by OCPP spec)
+            print(f"  🚀 Starting transaction for {id_tag} on connector {connector_id}")
+            
+            request = call.StartTransaction(
+                connector_id=connector_id,
+                id_tag=id_tag,
+                meter_start=0,  # Starting meter value
+                timestamp=utc_now_iso()
+            )
+            
+            response = await self.call(request)
+            transaction_id = response.transaction_id
+            
+            print(f"  ✅ StartTransaction accepted! Transaction ID: {transaction_id}")
+            
+            # Step 4: Send StatusNotification (Charging)
+            await self._send_status_notification_simple(
+                connector_id, "Charging", f"Transaction {transaction_id} in progress"
+            )
+            
+            # Store transaction info for potential remote stop
+            if not hasattr(self, '_active_transactions'):
+                self._active_transactions = {}
+            self._active_transactions[transaction_id] = {
+                'id_tag': id_tag,
+                'connector_id': connector_id,
+                'start_time': utc_now_iso(),
+                'meter_start': 0
+            }
+            
+            print(f"  📊 Transaction {transaction_id} is now active and charging")
+            
+        except Exception as e:
+            print(f"  ❌ Error in remote start flow: {e}")
+            # Send error status
+            await self._send_status_notification_simple(
+                connector_id, "Faulted", f"Remote start failed: {str(e)}"
+            )
+
+    async def _send_status_notification_simple(self, connector_id, status, info=None):
+        """Send a simple StatusNotification."""
+        try:
+            request = call.StatusNotification(
+                connector_id=connector_id,
+                error_code="NoError",
+                status=status,
+                info=info,
+                timestamp=utc_now_iso(),
+            )
+            await self.call(request)
+            print(f"  📊 StatusNotification sent: Connector {connector_id} → {status}")
+        except Exception as e:
+            print(f"  ❌ Failed to send StatusNotification: {e}")
 
     @on("RemoteStopTransaction")
     async def on_remote_stop_transaction(self, transaction_id):
@@ -87,15 +154,63 @@ class ChargePoint(ChargePointV16):
         print(f"\n🛑 Received RemoteStopTransaction request:")
         print(f"  Transaction ID: {transaction_id}")
 
-        # For demo purposes, accept most requests
+        # Check if we have this transaction active
+        if not hasattr(self, '_active_transactions'):
+            self._active_transactions = {}
+        
+        if transaction_id not in self._active_transactions:
+            print(f"  ❌ Transaction {transaction_id} not found or already stopped")
+            return call_result.RemoteStopTransaction(status="Rejected")
+
         print(f"  ✅ Accepting stop request for transaction {transaction_id}")
 
-        # In a real charge point, this would trigger:
-        # 1. Stop the charging process
-        # 2. Send StopTransaction request
-        # 3. StatusNotification (Available)
+        # Schedule the stop transaction flow
+        asyncio.create_task(self._handle_remote_stop_flow(transaction_id))
 
         return call_result.RemoteStopTransaction(status="Accepted")
+
+    async def _handle_remote_stop_flow(self, transaction_id):
+        """Handle the complete flow after accepting RemoteStopTransaction."""
+        try:
+            transaction_info = self._active_transactions.get(transaction_id)
+            if not transaction_info:
+                print(f"  ❌ Transaction {transaction_id} info not found")
+                return
+            
+            connector_id = transaction_info['connector_id']
+            id_tag = transaction_info['id_tag']
+            
+            # Step 1: Send StatusNotification (Finishing)
+            await asyncio.sleep(0.5)  # Brief delay
+            await self._send_status_notification_simple(
+                connector_id, "Finishing", "Remote stop initiated"
+            )
+            
+            # Step 2: Send StopTransaction.req (required by OCPP spec)
+            print(f"  🛑 Stopping transaction {transaction_id}")
+            
+            request = call.StopTransaction(
+                transaction_id=transaction_id,
+                meter_stop=1000,  # Simulated final meter reading
+                timestamp=utc_now_iso(),
+                reason="Remote",
+                id_tag=id_tag  # Optional, but good practice
+            )
+            
+            response = await self.call(request)
+            print(f"  ✅ StopTransaction completed! ID Tag status: {getattr(response, 'id_tag_info', {}).get('status', 'Unknown')}")
+            
+            # Step 3: Send StatusNotification (Available)
+            await self._send_status_notification_simple(
+                connector_id, "Available", f"Transaction {transaction_id} completed"
+            )
+            
+            # Remove from active transactions
+            del self._active_transactions[transaction_id]
+            print(f"  📊 Transaction {transaction_id} stopped and connector {connector_id} is now available")
+            
+        except Exception as e:
+            print(f"  ❌ Error in remote stop flow: {e}")
 
     @on("ChangeAvailability")
     async def on_change_availability(self, connector_id, type):
